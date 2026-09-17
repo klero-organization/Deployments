@@ -55,14 +55,12 @@ jobs:
           TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
         run: |
           git fetch --all
-          if [ -n "$TARGET_CID" ]; then
-            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
-              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found in any branch" && exit 1
-            echo "✅ Branch found: $BRANCH"
-            git checkout "$BRANCH"
-            git reset --hard "$TARGET_CID"
-          fi
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
 
       - name: Set image tag (First 4 digits of commit)
         id: tag
@@ -90,12 +88,12 @@ jobs:
           TARGET_CID: ${{ needs.setup.outputs.commit_id }}
         run: |
           git fetch --all
-          if [ -n "$TARGET_CID" ]; then
-            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
-              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit not found" && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
-          fi
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
 
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -114,7 +112,7 @@ jobs:
           FROM node:20-alpine AS builder
           WORKDIR /app
           COPY package*.json ./
-          RUN npm install
+          RUN npm install --legacy-peer-deps
           COPY . .
           ARG API_BASE_URL=https://dev-backend.klero.in
           ENV NEXT_PUBLIC_API_BASE_URL=$API_BASE_URL
@@ -159,12 +157,12 @@ jobs:
           TARGET_CID: ${{ needs.setup.outputs.commit_id }}
         run: |
           git fetch --all
-          if [ -n "$TARGET_CID" ]; then
-            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
-              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit not found" && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
-          fi
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
 
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -173,20 +171,26 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
 
       - name: Build & Push klero-frontend-user (Expo Web)
-        working-directory: klero-frontend/klero-user
+        working-directory: klero-frontend
         env:
           SVC: klero-frontend-user
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          echo "📝 Creating embedded Dockerfile.user..."
+          echo "📝 Creating embedded Dockerfile.user for monorepo..."
           cat > Dockerfile.user << 'DOCKERFILE'
           FROM node:20-alpine AS builder
           WORKDIR /app
-          COPY package*.json ./
-          RUN npm install
+
+          # Copy all source files from monorepo context
           COPY . .
-          # Install web dependencies required by Expo Web dynamically inside Docker container
-          RUN npx expo install react-dom react-native-web || npm install react-dom@19.2.3 react-native-web@^0.21.2 --legacy-peer-deps
+
+          # Install monorepo workspace dependencies (resolves local workspace @klero/tools)
+          RUN npm install --legacy-peer-deps
+
+          # Build internal shared packages (@klero/tools)
+          RUN npm run build:tools || (cd packages/tools && npm run build) || true
+
+          WORKDIR /app/klero-user
           ARG API_BASE_URL=https://dev-backend.klero.in
           ENV EXPO_PUBLIC_API_BASE_URL=$API_BASE_URL
           ENV VITE_API_BASE_URL=$API_BASE_URL
@@ -194,7 +198,7 @@ jobs:
 
           FROM nginx:alpine
           RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
-          COPY --from=builder /app/dist /usr/share/nginx/html
+          COPY --from=builder /app/klero-user/dist /usr/share/nginx/html
           EXPOSE 80
           CMD ["nginx", "-g", "daemon off;"]
           DOCKERFILE
