@@ -4,11 +4,11 @@ on:
   push:
     branches: [klero]
     paths:
-      - '.github/workflows/klero-deployment-de.yaml'
+      - '.github/workflows/klero-deployment-dev.yaml'
   workflow_dispatch:
 
 env:
-  COMMIT_ID: ""
+  COMMIT_ID:  d01e65426edefae18ad1cba068813c48c7aa1d43 
   REPO: klero-organization/klero-backend
   SSH_PORT: 22
   DOCKER_IMAGE_REPO: exchekhub/klero
