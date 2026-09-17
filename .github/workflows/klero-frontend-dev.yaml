@@ -7,7 +7,7 @@ on:
       - '.github/workflows/klero-frontend-dev.yaml'
   workflow_dispatch:
     inputs:
-      commit_id: 
+      commit_id:
         description: "Target commit ID from klero-frontend (paste commit SHA here, or leave blank to use env.COMMIT_ID)"
         required: false
         default: ""
@@ -181,6 +181,8 @@ jobs:
           COPY package*.json ./
           RUN npm install
           COPY . .
+          # Install web dependencies required by Expo Web dynamically inside Docker container
+          RUN npx expo install react-dom react-native-web || npm install react-dom@19.2.3 react-native-web@^0.21.2 --legacy-peer-deps
           ARG API_BASE_URL=https://dev-backend.klero.in
           ENV EXPO_PUBLIC_API_BASE_URL=$API_BASE_URL
           ENV VITE_API_BASE_URL=$API_BASE_URL
