@@ -188,14 +188,18 @@ jobs:
           RUN rm -rf klero-admin && \
               node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => w !== "klero-admin"); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
 
-          # Install monorepo workspace dependencies (resolves local workspace @klero/tools)
-          RUN npm install --legacy-peer-deps
+          # Disable DTS build and set ignoreDeprecations to prevent TS5101 (baseUrl deprecation in TypeScript 6)
+          RUN node -e 'const fs=require("fs"); const f="packages/tools/tsup.config.ts"; if(fs.existsSync(f)){ fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dts: true", "dts: false")); }' && \
+              node -e 'const fs=require("fs"); ["packages/tools/tsconfig.json", "klero-user/tsconfig.json"].forEach(f => { if(fs.existsSync(f)){ const c=JSON.parse(fs.readFileSync(f)); c.compilerOptions=c.compilerOptions||{}; c.compilerOptions.ignoreDeprecations="6.0"; fs.writeFileSync(f, JSON.stringify(c,null,2)); } });'
+
+          # Install monorepo workspace dependencies (ignore-scripts prevents premature prepare execution)
+          RUN npm install --legacy-peer-deps --ignore-scripts
 
           # Ensure Tailwind CSS v3 is installed at workspace root and in klero-user for NativeWind
           RUN npm install tailwindcss@3.4.17 --save-exact
 
-          # Build internal shared packages (@klero/tools)
-          RUN npm run build:tools || (cd packages/tools && npm run build) || true
+          # Build internal shared packages (@klero/tools) with tsup (pure ESM + CJS bundle)
+          RUN (cd packages/tools && npx tsup --no-dts) || (npm run build:tools -- --no-dts) || true
 
           WORKDIR /app/klero-user
           ARG API_BASE_URL=https://dev-backend.klero.in
