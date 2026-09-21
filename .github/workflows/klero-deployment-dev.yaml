@@ -24,7 +24,7 @@ env:
 
 jobs:
   setup:
-    name: "🔧 Checkout & Set Tag"
+    name: "ðŸ”§ Checkout & Set Tag"
     runs-on: ubuntu-latest
     outputs:
       sha4: ${{ steps.tag.outputs.SHA4 }}
@@ -37,7 +37,7 @@ jobs:
           ENV_CID="${{ env.COMMIT_ID }}"
           EFFECTIVE="${INPUT_CID:-$ENV_CID}"
           echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
-          echo "🎯 Target Commit ID: ${EFFECTIVE:-latest}"
+          echo "ðŸŽ¯ Target Commit ID: ${EFFECTIVE:-latest}"
 
       - name: Checkout klero-backend
         uses: actions/checkout@v4
@@ -56,8 +56,8 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found in any branch" && exit 1
-            echo "🌿 Branch found: $BRANCH"
+            [ -z "$BRANCH" ] && echo "âŒ Commit $TARGET_CID not found in any branch" && exit 1
+            echo "ðŸŒ¿ Branch found: $BRANCH"
             git checkout "$BRANCH"
             git reset --hard "$TARGET_CID"
           fi
@@ -68,16 +68,16 @@ jobs:
         run: |
           SHA4=$(git rev-parse HEAD | cut -c1-4)
           echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
-          echo "🏷️ First 4 digits of commit: ${SHA4}"
+          echo "ðŸ·ï¸ First 4 digits of commit: ${SHA4}"
 
       - name: List klero-server modules
         working-directory: klero-backend/klero-server
         run: |
-          echo "📦 Backend modules available:"
-          ls -1
+          echo "ðŸ“¦ Backend modules available:"
+          ls -la
 
   build_eureka:
-    name: "🔨 Build klero-eukea-service"
+    name: "ðŸ”¨ Build klero-eukea-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -96,7 +96,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -115,9 +115,9 @@ jobs:
           SVC: klero-eukea-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.eureka << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -131,10 +131,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.eureka .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_gateway:
-    name: "🔨 Build klero-gateway-service"
+    name: "ðŸ”¨ Build klero-gateway-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -153,7 +153,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -172,9 +172,9 @@ jobs:
           SVC: klero-gateway-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.gateway << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -188,10 +188,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.gateway .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_admin:
-    name: "🔨 Build klero-admin-service"
+    name: "ðŸ”¨ Build klero-admin-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -210,7 +210,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -229,9 +229,9 @@ jobs:
           SVC: klero-admin-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.admin << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -245,10 +245,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.admin .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_customer:
-    name: "🔨 Build klero-customer-service"
+    name: "ðŸ”¨ Build klero-customer-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -267,7 +267,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -286,9 +286,9 @@ jobs:
           SVC: klero-customer-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.customer << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -302,10 +302,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.customer .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_advisor:
-    name: "🔨 Build klero-advisor-service"
+    name: "ðŸ”¨ Build klero-advisor-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -324,7 +324,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -343,9 +343,9 @@ jobs:
           SVC: klero-advisor-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.advisor << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -359,10 +359,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.advisor .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_notify:
-    name: "🔨 Build klero-notification-service"
+    name: "ðŸ”¨ Build klero-notification-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -381,7 +381,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -400,9 +400,9 @@ jobs:
           SVC: klero-notification-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.notify << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -416,10 +416,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.notify .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_s3:
-    name: "🔨 Build klero-s3-service"
+    name: "ðŸ”¨ Build klero-s3-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -438,7 +438,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -457,9 +457,9 @@ jobs:
           SVC: klero-s3-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.s3 << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -473,10 +473,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.s3 .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_auth:
-    name: "🔨 Build klero-auth-service"
+    name: "ðŸ”¨ Build klero-auth-service"
     runs-on: ubuntu-latest
     needs: setup
     steps:
@@ -495,7 +495,7 @@ jobs:
           if [ -n "$TARGET_CID" ]; then
             BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            [ -z "$BRANCH" ] && echo '❌ Commit not found' && exit 1
+            [ -z "$BRANCH" ] && echo 'âŒ Commit not found' && exit 1
             git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
           fi
       - uses: actions/setup-java@v4
@@ -514,9 +514,9 @@ jobs:
           SVC: klero-auth-service
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          if [ ! -d "$SVC" ]; then echo "⚠️ Module $SVC not found — skipping"; exit 0; fi
+          if [ ! -d "$SVC" ]; then echo "âŒ Module $SVC not found in klero-server"; exit 1; fi
 
-          mvn -f pom.xml -U -B -DskipTests=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
 
           cat > Dockerfile.auth << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
@@ -530,10 +530,10 @@ jobs:
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
             --push -f Dockerfile.auth .
-          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+          echo "âœ… Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   stop_all_klero:
-    name: "🛑 Stop All Backend Containers"
+    name: "ðŸ›‘ Stop All Backend Containers"
     runs-on: ubuntu-latest
     needs:
       - build_eureka
@@ -569,7 +569,7 @@ jobs:
       - name: Stop and remove all backend containers
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
-            echo "🛑 Stopping all Klero backend containers..."
+            echo "ðŸ›‘ Stopping all Klero backend containers..."
             for SVC in klero-eukea-service klero-gateway-service klero-admin-service klero-customer-service klero-advisor-service klero-notification-service klero-s3-service klero-auth-service; do
               docker stop "$SVC" 2>/dev/null || true
               docker rm --force "$SVC" 2>/dev/null || true
@@ -578,7 +578,7 @@ jobs:
           EOSSH
 
   deploy_all_services:
-    name: "🚀 Deploy All Backend Services"
+    name: "ðŸš€ Deploy All Backend Services"
     runs-on: ubuntu-latest
     needs: [setup, stop_all_klero]
     steps:
@@ -621,7 +621,7 @@ jobs:
               -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
               -e SERVER_PORT=$PORT \
               "$FULL_IMAGE"
-            echo "⏳ Waiting 15s for Eureka to initialize..."
+            echo "â³ Waiting 15s for Eureka to initialize..."
             sleep 15
           EOSSH
 
@@ -786,7 +786,7 @@ jobs:
           EOSSH
 
   deployment_summary:
-    name: "📊 Deployment Summary"
+    name: "ðŸ“Š Deployment Summary"
     runs-on: ubuntu-latest
     if: always()
     needs: [deploy_all_services]
@@ -816,13 +816,13 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
             echo ""
             echo "=================================================================="
-            echo "          KLERO DEV — All Backend Services Summary               "
+            echo "          KLERO DEV â€” All Backend Services Summary               "
             echo "=================================================================="
             echo ""
-            echo "🕒 Running klero containers:"
+            echo "ðŸ•’ Running klero containers:"
             docker ps --filter "name=klero-" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
             echo ""
-            echo "⚠️ Exited containers (if any):"
-            EXITED=$(docker ps -a --filter "name=klero-" --filter "status=exited" --format " {{.Names}} ➔ {{.Status}}")
-            [ -z "$EXITED" ] && echo " None ✅" || echo "$EXITED"
+            echo "âš ï¸ Exited containers (if any):"
+            EXITED=$(docker ps -a --filter "name=klero-" --filter "status=exited" --format " {{.Names}} âž” {{.Status}}")
+            [ -z "$EXITED" ] && echo " None âœ…" || echo "$EXITED"
           EOSSH
