@@ -2,7 +2,7 @@ name: Klero Dev Deployment (Core Services)
 
 on:
   push:
-    branches: [klero]
+    branches: main
     paths:
       - '.github/workflows/klero-deployment-dev.yaml'
   workflow_dispatch:
