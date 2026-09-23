@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  COMMIT_ID: ""
+  COMMIT_ID: "7fd61c0be6d4339892c33c97ed09a9b864351335"
   REPO: klero-organization/klero-backend
   SSH_PORT: 22
   DOCKER_IMAGE_REPO: exchekhub/klero
