@@ -2,7 +2,7 @@ name: Klero Prod Deployment (All Backend Services)
 
 on:
   push:
-    branches: [main, klero]
+    branches: [klero]
     paths:
       - '.github/workflows/klero-deployment-prod.yaml'
   workflow_dispatch:
@@ -51,7 +51,7 @@ jobs:
         run: |
           git fetch --all
           if [ -n "$TARGET_CID" ]; then
-            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -z "$BRANCH" ] && echo "[ERROR] Commit $TARGET_CID not found in any branch" && exit 1
             echo "[INFO] Branch found: $BRANCH"
             git checkout "$BRANCH"
@@ -117,9 +117,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.eureka << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -127,7 +125,6 @@ jobs:
           EXPOSE 8761
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -179,9 +176,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.gateway << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -189,7 +184,6 @@ jobs:
           EXPOSE 8080
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -241,9 +235,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.auth << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -251,7 +243,6 @@ jobs:
           EXPOSE 8086
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -303,9 +294,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.admin << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -313,7 +302,6 @@ jobs:
           EXPOSE 8081
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -365,9 +353,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.customer << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -375,7 +361,6 @@ jobs:
           EXPOSE 8082
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -427,9 +412,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.advisor << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -437,7 +420,6 @@ jobs:
           EXPOSE 8083
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -489,9 +471,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.notify << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -499,7 +479,6 @@ jobs:
           EXPOSE 8084
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -551,9 +530,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.s3 << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -561,7 +538,6 @@ jobs:
           EXPOSE 8085
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -613,9 +589,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.finengine << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -623,7 +597,6 @@ jobs:
           EXPOSE 8087
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -675,9 +648,7 @@ jobs:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
           if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-
           mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-
           cat > Dockerfile.pg << 'DOCKERFILE'
           FROM eclipse-temurin:17-jre
           WORKDIR /app
@@ -685,7 +656,6 @@ jobs:
           EXPOSE 8089
           ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
           DOCKERFILE
-
           docker buildx build --platform linux/amd64 \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
@@ -709,9 +679,9 @@ jobs:
     steps:
       - name: Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_EXCHEK_PROD || secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST_EXCHEK_PROD || secrets.SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_EXCHEK_PROD || secrets.SSH_USERNAME }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
@@ -746,9 +716,9 @@ jobs:
     steps:
       - name: Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_EXCHEK_PROD || secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST_EXCHEK_PROD || secrets.SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_EXCHEK_PROD || secrets.SSH_USERNAME }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
@@ -997,7 +967,7 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
             echo "=== Klero Backend Containers Status ==="
-            docker ps --filter "name=klero-" --format "table {{.Names}}	{{.Status}}	{{.Ports}}"
+            docker ps --filter "name=klero-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
           EOSSH
 
   deployment_summary:
