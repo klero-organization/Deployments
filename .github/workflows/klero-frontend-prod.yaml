@@ -2,7 +2,7 @@ name: Klero Frontend Deployment (Admin & User) - PROD
 
 on:
   push:
-    branches: [klero-prod]
+    branches: [klero]
     paths:
       - '.github/workflows/klero-frontend-prod.yaml'
   workflow_dispatch:
