@@ -1,0 +1,1034 @@
+name: Klero Prod Deployment (All Backend Services)
+
+on:
+  push:
+    branches: [main, klero]
+    paths:
+      - '.github/workflows/klero-deployment-prod.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-backend (paste commit SHA here, or leave blank to use latest commit)"
+        required: false
+        default: ""
+
+env:
+  COMMIT_ID: f15ca8e984cb8603bc936dacee8e830ea67495c0
+  REPO: klero-organization/klero-backend
+  SSH_PORT: 22
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SPRING_PROFILE: prod
+
+jobs:
+  setup:
+    name: "Setup - Checkout and Set Tag"
+    runs-on: ubuntu-latest
+    outputs:
+      sha4: ${{ steps.tag.outputs.SHA4 }}
+      commit_id: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+    steps:
+      - name: Resolve Effective Commit ID
+        id: resolve_commit
+        run: |
+          INPUT_CID="${{ github.event.inputs.commit_id }}"
+          ENV_CID="${{ env.COMMIT_ID }}"
+          EFFECTIVE="${INPUT_CID:-$ENV_CID}"
+          echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
+          echo "Target Commit ID: ${EFFECTIVE:-latest}"
+
+      - name: Checkout klero-backend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to COMMIT_ID
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1               | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo "[ERROR] Commit $TARGET_CID not found in any branch" && exit 1
+            echo "[INFO] Branch found: $BRANCH"
+            git checkout "$BRANCH"
+            git reset --hard "$TARGET_CID"
+          fi
+
+      - name: Set image tag (First 4 digits of commit)
+        id: tag
+        working-directory: klero-backend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "First 4 digits of commit: ${SHA4}"
+
+      - name: List klero-server modules
+        working-directory: klero-backend/klero-server
+        run: |
+          echo "Backend modules available:"
+          ls -la
+
+  build_eureka:
+    name: "Build - klero-eukea-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-eukea-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-eukea-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.eureka << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-eukea-service/target/*.jar app.jar
+          EXPOSE 8761
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.eureka .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_gateway:
+    name: "Build - klero-gateway-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-gateway-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-gateway-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.gateway << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-gateway-service/target/*.jar app.jar
+          EXPOSE 8080
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.gateway .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_auth:
+    name: "Build - klero-auth-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-auth-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-auth-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.auth << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-auth-service/target/*.jar app.jar
+          EXPOSE 8086
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.auth .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_admin:
+    name: "Build - klero-admin-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-admin-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-admin-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.admin << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-admin-service/target/*.jar app.jar
+          EXPOSE 8081
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.admin .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_customer:
+    name: "Build - klero-customer-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-customer-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-customer-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.customer << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-customer-service/target/*.jar app.jar
+          EXPOSE 8082
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.customer .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_advisor:
+    name: "Build - klero-advisor-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-advisor-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-advisor-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.advisor << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-advisor-service/target/*.jar app.jar
+          EXPOSE 8083
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.advisor .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_notify:
+    name: "Build - klero-notify-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-notify-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-notify-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.notify << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-notify-service/target/*.jar app.jar
+          EXPOSE 8084
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.notify .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_s3:
+    name: "Build - klero-s3-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-s3-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-s3-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.s3 << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-s3-service/target/*.jar app.jar
+          EXPOSE 8085
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.s3 .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_financial_engine:
+    name: "Build - klero-financial-engine-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-financial-engine-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-financial-engine-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.finengine << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-financial-engine-service/target/*.jar app.jar
+          EXPOSE 8087
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.finengine .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  build_pg:
+    name: "Build - klero-pg-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_EXCHEK_USERNAME_PROD || secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_EXCHEK_TOKEN_PROD || secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-pg-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-pg-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.pg << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-pg-service/target/*.jar app.jar
+          EXPOSE 8089
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.pg .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+
+  stop_all_klero:
+    name: "Stop All Backend Containers"
+    runs-on: ubuntu-latest
+    needs:
+      - build_eureka
+      - build_gateway
+      - build_auth
+      - build_admin
+      - build_customer
+      - build_advisor
+      - build_notify
+      - build_s3
+      - build_financial_engine
+      - build_pg
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_EXCHEK_PROD || secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST_EXCHEK_PROD || secrets.SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_EXCHEK_PROD || secrets.SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+          EOF
+
+      - name: Stop and remove all backend containers
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
+            echo "[INFO] Stopping all Klero backend containers..."
+            for SVC in klero-eukea-service klero-gateway-service klero-auth-service klero-admin-service klero-customer-service klero-advisor-service klero-notify-service klero-s3-service klero-financial-engine-service klero-pg-service klero-notification-service; do
+              docker stop "$SVC" 2>/dev/null || true
+              docker rm --force "$SVC" 2>/dev/null || true
+            done
+            sleep 5
+          EOSSH
+
+  deploy_all_services:
+    name: "Deploy All Backend Services"
+    runs-on: ubuntu-latest
+    needs: [setup, stop_all_klero]
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_EXCHEK_PROD || secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST_EXCHEK_PROD || secrets.SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_EXCHEK_PROD || secrets.SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+          EOF
+
+      - name: Deploy klero-eukea-service (8761)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-eukea-service"
+            PORT=8761
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              "$FULL_IMAGE"
+            echo "[INFO] Waiting 15s for Eureka to initialize..."
+            sleep 15
+          EOSSH
+
+      - name: Deploy klero-gateway-service (8080)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-gateway-service"
+            PORT=8080
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-auth-service (8086)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-auth-service"
+            PORT=8086
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-admin-service (8081)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-admin-service"
+            PORT=8081
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-customer-service (8082)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-customer-service"
+            PORT=8082
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-advisor-service (8083)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-advisor-service"
+            PORT=8083
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-notify-service (8084)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-notify-service"
+            PORT=8084
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-s3-service (8085)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-s3-service"
+            PORT=8085
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-financial-engine-service (8087)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-financial-engine-service"
+            PORT=8087
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Deploy klero-pg-service (8089)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-pg-service"
+            PORT=8089
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
+
+      - name: Verify Running Backend Containers
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
+            echo "=== Klero Backend Containers Status ==="
+            docker ps --filter "name=klero-" --format "table {{.Names}}	{{.Status}}	{{.Ports}}"
+          EOSSH
+
+  deployment_summary:
+    name: "Deployment Summary"
+    runs-on: ubuntu-latest
+    needs: [setup, deploy_all_services]
+    if: always()
+    steps:
+      - name: Generate Summary Report
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+          STATUS: ${{ needs.deploy_all_services.result }}
+        run: |
+          echo "## Klero Backend Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** \`${{ env.SPRING_PROFILE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag (SHA4):** \`${SHA4}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Repository:** \`${{ env.DOCKER_IMAGE_REPO }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Status:** \`${STATUS}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Microservices Deployed (10 Services)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Port | Image |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-eukea-service | 8761 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-eukea-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-gateway-service | 8080 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-gateway-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-auth-service | 8086 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-auth-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-admin-service | 8081 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-admin-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-customer-service | 8082 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-customer-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-advisor-service | 8083 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-advisor-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-notify-service | 8084 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-notify-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-s3-service | 8085 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-s3-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-financial-engine-service | 8087 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-financial-engine-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-pg-service | 8089 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-pg-service\` |" >> $GITHUB_STEP_SUMMARY
