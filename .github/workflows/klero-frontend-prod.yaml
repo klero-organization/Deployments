@@ -14,7 +14,7 @@ on:
 
 env:
   # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch)
-  COMMIT_ID: 472c80b2d1e84df462711c67a3f41b1f57680f83
+  COMMIT_ID: 46f1f18bb34e08731842bd74d3d17f058cc14a2f
   # Source repository
   REPO_FRONTEND: klero-organization/klero-frontend
   DOCKER_IMAGE_REPO: exchekhub/klero
