@@ -1,0 +1,287 @@
+name: Klero Frontend Deployment (Admin & User) - PROD
+
+on:
+  push:
+    branches: [klero-prod]
+    paths:
+      - '.github/workflows/klero-frontend-prod.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (paste commit SHA here, or leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+
+env:
+  # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch)
+  COMMIT_ID: 472c80b2d1e84df462711c67a3f41b1f57680f83
+  # Source repository
+  REPO_FRONTEND: klero-organization/klero-frontend
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SSH_PORT: 22
+
+jobs:
+  setup:
+    name: "🔧 Checkout & Set Tag"
+    runs-on: ubuntu-latest
+    outputs:
+      sha4: ${{ steps.tag.outputs.SHA4 }}
+      commit_id: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+    steps:
+      - name: Resolve Effective Commit ID
+        id: resolve_commit
+        run: |
+          INPUT_CID="${{ github.event.inputs.commit_id }}"
+          ENV_CID="${{ env.COMMIT_ID }}"
+          EFFECTIVE="${INPUT_CID:-$ENV_CID}"
+          if [ -z "$EFFECTIVE" ]; then
+            echo "❌ Error: COMMIT_ID is required! Please paste commit SHA in env.COMMIT_ID or pass it via workflow_dispatch input."
+            exit 1
+          fi
+          echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
+          echo "🎯 Target Commit ID: ${EFFECTIVE}"
+
+      - name: Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Reset to COMMIT_ID
+        working-directory: klero-frontend
+        env:
+          TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+        run: |
+          git fetch --all
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - name: Set image tag (First 4 digits of commit)
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
+
+  build_and_push_admin:
+    name: "🔨 Build & Push klero-frontend-admin"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Reset to commit
+        working-directory: klero-frontend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit not found" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
+
+      - name: Build & Push klero-frontend-admin (Next.js)
+        working-directory: klero-frontend/klero-admin
+        env:
+          SVC: klero-frontend-admin
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          echo "📝 Creating embedded Dockerfile.admin..."
+          cat > Dockerfile.admin << 'DOCKERFILE'
+          FROM node:20-alpine AS builder
+          WORKDIR /app
+          COPY package*.json ./
+          RUN npm install --legacy-peer-deps
+          COPY . .
+          ARG API_BASE_URL=https://backend.klero.in
+          ENV NEXT_PUBLIC_API_BASE=$API_BASE_URL
+          ENV NEXT_PUBLIC_API_BASE_URL=$API_BASE_URL
+          RUN npm run build
+
+          FROM node:20-alpine AS runner
+          WORKDIR /app
+          ENV NODE_ENV=production
+          ENV PORT=3001
+          ENV HOSTNAME="0.0.0.0"
+          COPY --from=builder /app ./
+          EXPOSE 3001
+          CMD ["npm", "run", "start", "--", "-p", "3001"]
+          DOCKERFILE
+
+          echo "✅ Dockerfile.admin created successfully:"
+          ls -la Dockerfile.admin
+
+          echo "📂 Building klero-admin with embedded Dockerfile.admin..."
+          docker buildx build --platform linux/amd64 \
+            --build-arg API_BASE_URL=https://backend.klero.in \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-prod \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4}-prod \
+            --push -f Dockerfile.admin .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-prod"
+
+  build_and_push_user:
+    name: "🔨 Build & Push klero-frontend-user"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Reset to commit
+        working-directory: klero-frontend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit not found" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
+
+      - name: Build & Push klero-frontend-user (Expo Web)
+        working-directory: klero-frontend
+        env:
+          SVC: klero-frontend-user
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          echo "📝 Creating embedded Dockerfile.user for monorepo..."
+          cat > Dockerfile.user << 'DOCKERFILE'
+          FROM node:20-alpine AS builder
+          WORKDIR /app
+
+          # Copy all source files from monorepo context
+          COPY . .
+
+          # Exclude klero-admin from this build to prevent Tailwind CSS v4 from conflicting with NativeWind (which strictly requires Tailwind v3)
+          RUN rm -rf klero-admin && \
+              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => w !== "klero-admin"); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
+
+          # Disable DTS build and set ignoreDeprecations to prevent TS5101 (baseUrl deprecation in TypeScript 6)
+          RUN node -e 'const fs=require("fs"); const f="packages/tools/tsup.config.ts"; if(fs.existsSync(f)){ fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dts: true", "dts: false")); }' && \
+              node -e 'const fs=require("fs"); ["packages/tools/tsconfig.json", "klero-user/tsconfig.json"].forEach(f => { if(fs.existsSync(f)){ const c=JSON.parse(fs.readFileSync(f)); c.compilerOptions=c.compilerOptions||{}; c.compilerOptions.ignoreDeprecations="6.0"; fs.writeFileSync(f, JSON.stringify(c,null,2)); } });'
+
+          # Install monorepo workspace dependencies (ignore-scripts prevents premature prepare execution)
+          RUN npm install --legacy-peer-deps --ignore-scripts
+
+          # Ensure Tailwind CSS v3 is installed at workspace root and in klero-user for NativeWind
+          RUN npm install tailwindcss@3.4.17 --save-exact
+
+          # Build internal shared packages (@klero/tools) with tsup (pure ESM + CJS bundle)
+          RUN (cd packages/tools && npx tsup --no-dts) || (npm run build:tools -- --no-dts) || true
+
+          WORKDIR /app/klero-user
+          ARG API_BASE_URL=https://backend.klero.in/api
+          ENV EXPO_PUBLIC_API_URL=$API_BASE_URL
+          ENV EXPO_PUBLIC_API_BASE_URL=$API_BASE_URL
+          ENV VITE_API_BASE_URL=$API_BASE_URL
+          RUN npx expo export --platform web
+
+          FROM nginx:alpine
+          RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+          COPY --from=builder /app/klero-user/dist /usr/share/nginx/html
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+          DOCKERFILE
+
+          echo "✅ Dockerfile.user created successfully:"
+          ls -la Dockerfile.user
+
+          echo "📂 Building klero-user with embedded Dockerfile.user..."
+          docker buildx build --platform linux/amd64 \
+            --build-arg API_BASE_URL=https://backend.klero.in/api \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-prod \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4}-prod \
+            --push -f Dockerfile.user .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-prod"
+
+  deploy_to_prod:
+    name: "🚀 Deploy Frontends to Production Server"
+    runs-on: ubuntu-latest
+    needs: [setup, build_and_push_admin, build_and_push_user]
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_PROD || secrets.SSH_HOST_KLERO_PROD || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_PROD || secrets.SSH_USERNAME_KLERO_PROD || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+          EOF
+
+      - name: Deploy Frontend Containers
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+
+            echo "🚀 Deploying User Frontend (Port 3000)..."
+            SVC_USER="klero-frontend-user"
+            IMG_USER="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC_USER}-prod"
+            docker stop "$SVC_USER" 2>/dev/null || true
+            docker rm --force "$SVC_USER" 2>/dev/null || true
+            docker pull "$IMG_USER"
+            docker run -d --name "$SVC_USER" --restart unless-stopped \
+              -p 3000:80 \
+              "$IMG_USER"
+
+            echo "🚀 Deploying Admin Frontend (Port 3001)..."
+            SVC_ADMIN="klero-frontend-admin"
+            IMG_ADMIN="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC_ADMIN}-prod"
+            docker stop "$SVC_ADMIN" 2>/dev/null || true
+            docker rm --force "$SVC_ADMIN" 2>/dev/null || true
+            docker pull "$IMG_ADMIN"
+            docker run -d --name "$SVC_ADMIN" --restart unless-stopped \
+              -p 3001:3001 \
+              "$IMG_ADMIN"
+
+            echo ""
+            echo "✅ Frontend Containers Status:"
+            docker ps --filter "name=klero-frontend-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          EOSSH
