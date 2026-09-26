@@ -1,0 +1,104 @@
+name: klero deploy all services
+
+# Orchestrator: deploys every backend service (at one klero-backend commit)
+# and both frontends (at one klero-frontend commit) without editing any of
+# the 12 individual workflow files. Each individual workflow still works
+# standalone via its own workflow_dispatch, exactly as before - this just
+# calls all of them in one go with a shared commit id per repo.
+#
+# Leave either commit id blank to deploy that repo's services at HEAD of
+# their default branch instead of a specific commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_commit_id:
+        description: "Commit SHA in klero-backend to deploy to ALL backend services (blank = HEAD)"
+        required: false
+        default: ""
+      frontend_commit_id:
+        description: "Commit SHA in klero-frontend to deploy to BOTH frontend apps (blank = HEAD)"
+        required: false
+        default: ""
+
+jobs:
+  eureka:
+    uses: ./.github/workflows/klero-eureka-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  gateway:
+    needs: eureka
+    uses: ./.github/workflows/klero-gateway-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  auth:
+    needs: eureka
+    uses: ./.github/workflows/klero-auth-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  admin:
+    needs: eureka
+    uses: ./.github/workflows/klero-admin-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  customer:
+    needs: eureka
+    uses: ./.github/workflows/klero-customer-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  advisor:
+    needs: eureka
+    uses: ./.github/workflows/klero-advisor-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  notify:
+    needs: eureka
+    uses: ./.github/workflows/klero-notify-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  s3:
+    needs: eureka
+    uses: ./.github/workflows/klero-s3-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  financial_engine:
+    needs: eureka
+    uses: ./.github/workflows/klero-financial-engine-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  pg:
+    needs: eureka
+    uses: ./.github/workflows/klero-pg-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.backend_commit_id }}
+
+  frontend_user:
+    uses: ./.github/workflows/klero-frontend-user.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.frontend_commit_id }}
+
+  frontend_admin:
+    uses: ./.github/workflows/klero-frontend-admin.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ inputs.frontend_commit_id }}

@@ -1,0 +1,136 @@
+name: klero notify service deploy
+
+on:
+  push:
+    branches: [klero]
+    paths:
+      - '.github/workflows/klero-notify-service.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-backend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-backend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  COMMIT_ID: f15ca8e984cb8603bc936dacee8e830ea67495c0
+  REPO: klero-organization/klero-backend
+  SVC: klero-notify-service
+  CHART: klero-notify-service
+  RELEASE: klero-notify
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SPRING_PROFILE: prod
+  SSH_PORT: 4719
+
+jobs:
+  build_push_deploy:
+    name: "Build, Push & Deploy klero-notify-service"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout klero-backend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Determine branch containing commit and reset to commit
+        working-directory: klero-backend
+        run: |
+          INPUT_CID="${{ inputs.commit_id }}"
+          TARGET_CID="${INPUT_CID:-${{ env.COMMIT_ID }}}"
+          if [ -z "$TARGET_CID" ]; then
+            echo "No commit specified, using HEAD"
+          else
+            git fetch --all
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            if [ -z "$BRANCH" ]; then
+              echo "❌ Commit not found in any remote branch."
+              exit 1
+            fi
+            echo "✅ Found branch '$BRANCH' containing commit."
+            git checkout "$BRANCH"
+            git reset --hard "$TARGET_CID"
+          fi
+
+      - name: Set image tag (first 4 chars of commit SHA)
+        id: tag
+        working-directory: klero-backend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push klero-notify-service
+        working-directory: klero-backend/klero-server
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${{ env.SVC }} -am clean package
+          cat > Dockerfile.svc << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-notify-service/target/*.jar app.jar
+          EXPOSE 8084
+          ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+          DOCKERFILE
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }} \
+            --push -f Dockerfile.svc .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}"
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Deploy klero-notify-service via Helm
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          ssh target bash -s "${SHA4}" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            cd ~/klero
+            helm upgrade --install ${{ env.RELEASE }} helmcharts/${{ env.CHART }} \
+              -n klero \
+              --set image.tag="${SHA4}-${{ env.SVC }}" \
+              --wait --timeout=5m
+            echo "🔍 Pod status:"
+            kubectl get pods -n klero -l app=${{ env.CHART }} -o wide
+          EOSSH

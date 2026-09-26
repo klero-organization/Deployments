@@ -1,0 +1,153 @@
+name: klero frontend user deploy
+
+on:
+  push:
+    branches: [klero]
+    paths:
+      - '.github/workflows/klero-frontend-user.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  COMMIT_ID: ""  # paste target commit SHA from klero-frontend here, or pass via workflow_dispatch input
+  REPO: klero-organization/klero-frontend
+  SVC: klero-frontend-user
+  CHART: klero-frontend-user
+  RELEASE: klero-frontend-user
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SSH_PORT: 4719
+
+jobs:
+  build_push_deploy:
+    name: "Build, Push & Deploy klero-frontend-user"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Determine branch containing commit and reset to commit
+        working-directory: klero-frontend
+        run: |
+          INPUT_CID="${{ inputs.commit_id }}"
+          TARGET_CID="${INPUT_CID:-${{ env.COMMIT_ID }}}"
+          if [ -z "$TARGET_CID" ]; then
+            echo "No commit specified, using HEAD"
+          else
+            git fetch --all
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            if [ -z "$BRANCH" ]; then
+              echo "❌ Commit not found in any remote branch."
+              exit 1
+            fi
+            git checkout "$BRANCH"
+            git reset --hard "$TARGET_CID"
+          fi
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - name: Set image tag (first 4 chars of commit SHA)
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push klero-frontend-user (Expo Web)
+        working-directory: klero-frontend
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          echo "📝 Creating embedded Dockerfile.user for monorepo..."
+          cat > Dockerfile.user << 'DOCKERFILE'
+          FROM node:20-alpine AS builder
+          WORKDIR /app
+
+          COPY . .
+
+          RUN rm -rf klero-admin && \
+              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => w !== "klero-admin"); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
+
+          RUN node -e 'const fs=require("fs"); const f="packages/tools/tsup.config.ts"; if(fs.existsSync(f)){ fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dts: true", "dts: false")); }' && \
+              node -e 'const fs=require("fs"); ["packages/tools/tsconfig.json", "klero-user/tsconfig.json"].forEach(f => { if(fs.existsSync(f)){ const c=JSON.parse(fs.readFileSync(f)); c.compilerOptions=c.compilerOptions||{}; c.compilerOptions.ignoreDeprecations="6.0"; fs.writeFileSync(f, JSON.stringify(c,null,2)); } });'
+
+          RUN npm install --legacy-peer-deps --ignore-scripts
+          RUN npm install tailwindcss@3.4.17 --save-exact
+          RUN (cd packages/tools && npx tsup --no-dts) || (npm run build:tools -- --no-dts) || true
+
+          WORKDIR /app/klero-user
+          ARG API_BASE_URL=https://backend.klero.in/api
+          ENV EXPO_PUBLIC_API_URL=$API_BASE_URL
+          ENV EXPO_PUBLIC_API_BASE_URL=$API_BASE_URL
+          ENV VITE_API_BASE_URL=$API_BASE_URL
+          RUN npx expo export --platform web
+
+          FROM nginx:alpine
+          RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+          COPY --from=builder /app/klero-user/dist /usr/share/nginx/html
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            --build-arg API_BASE_URL=https://backend.klero.in/api \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod \
+            --push -f Dockerfile.user .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod"
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Deploy klero-frontend-user via Helm
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          ssh target bash -s "${SHA4}" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            cd ~/klero
+            helm upgrade --install ${{ env.RELEASE }} helmcharts/${{ env.CHART }} \
+              -n klero \
+              --set image.tag="${SHA4}-${{ env.SVC }}-prod" \
+              --wait --timeout=5m
+            echo "🔍 Pod status:"
+            kubectl get pods -n klero -l app=${{ env.CHART }} -o wide
+          EOSSH
