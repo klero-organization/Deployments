@@ -2,7 +2,7 @@ name: klero frontend user deploy
 
 on:
   push:
-    branches: [klero]
+    branches: [klero-prod]
     paths:
       - '.github/workflows/klero-frontend-user.yaml'
   workflow_dispatch:
