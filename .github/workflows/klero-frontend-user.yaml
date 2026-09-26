@@ -20,7 +20,7 @@ on:
         type: string
 
 env:
-  COMMIT_ID: ""  # paste target commit SHA from klero-frontend here, or pass via workflow_dispatch input
+  COMMIT_ID: 7e933f855dd78a160349e9bbe24e300e93e2fb76  # paste target commit SHA from klero-frontend here, or pass via workflow_dispatch input
   REPO: klero-organization/klero-frontend
   SVC: klero-frontend-user
   CHART: klero-frontend-user
