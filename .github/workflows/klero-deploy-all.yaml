@@ -9,96 +9,130 @@ name: klero deploy all services
 # Leave either commit id blank to deploy that repo's services at HEAD of
 # their default branch instead of a specific commit.
 
+env:
+  # Edit these two values and push to this file (on klero-prod) to trigger a
+  # full deploy of every service at these commits - same edit-and-push
+  # pattern as the individual service workflows. Leave blank to deploy that
+  # repo's services at HEAD instead.
+  BACKEND_COMMIT_ID: f15ca8e984cb8603bc936dacee8e830ea67495c0
+  FRONTEND_COMMIT_ID: dc2a2d905da52e3419aa0efdac768601d6adeeea
+
 on:
+  push:
+    branches: [klero-prod]
+    paths:
+      - '.github/workflows/klero-deploy-all.yaml'
   workflow_dispatch:
     inputs:
-      backend_commit_id: 
-        description: "Commit SHA in klero-backend to deploy to ALL backend services (blank = HEAD)"
+      backend_commit_id:
+        description: "Commit SHA in klero-backend to deploy to ALL backend services (blank = use env.BACKEND_COMMIT_ID)"
         required: false
-        default: f15ca8e984cb8603bc936dacee8e830ea67495c0
+        default: ""
       frontend_commit_id:
-        description: "Commit SHA in klero-frontend to deploy to BOTH frontend apps (blank = HEAD)"
+        description: "Commit SHA in klero-frontend to deploy to BOTH frontend apps (blank = use env.FRONTEND_COMMIT_ID)"
         required: false
-        default: dc2a2d905da52e3419aa0efdac768601d6adeeea
+        default: ""
 
 jobs:
+  resolve:
+    name: "Resolve target commit IDs"
+    runs-on: ubuntu-latest
+    outputs:
+      backend_cid: ${{ steps.resolve.outputs.backend_cid }}
+      frontend_cid: ${{ steps.resolve.outputs.frontend_cid }}
+    steps:
+      - name: Resolve backend/frontend commit ids
+        id: resolve
+        run: |
+          BACKEND_CID="${{ inputs.backend_commit_id }}"
+          BACKEND_CID="${BACKEND_CID:-${{ env.BACKEND_COMMIT_ID }}}"
+          FRONTEND_CID="${{ inputs.frontend_commit_id }}"
+          FRONTEND_CID="${FRONTEND_CID:-${{ env.FRONTEND_COMMIT_ID }}}"
+          echo "backend_cid=${BACKEND_CID}" >> $GITHUB_OUTPUT
+          echo "frontend_cid=${FRONTEND_CID}" >> $GITHUB_OUTPUT
+          echo "🎯 Backend commit: ${BACKEND_CID:-HEAD}"
+          echo "🎯 Frontend commit: ${FRONTEND_CID:-HEAD}"
+
   eureka:
+    needs: resolve
     uses: ./.github/workflows/klero-eureka-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   gateway:
     needs: eureka
     uses: ./.github/workflows/klero-gateway-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   auth:
     needs: eureka
     uses: ./.github/workflows/klero-auth-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   admin:
     needs: eureka
     uses: ./.github/workflows/klero-admin-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   customer:
     needs: eureka
     uses: ./.github/workflows/klero-customer-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   advisor:
     needs: eureka
     uses: ./.github/workflows/klero-advisor-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   notify:
     needs: eureka
     uses: ./.github/workflows/klero-notify-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   s3:
     needs: eureka
     uses: ./.github/workflows/klero-s3-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   financial_engine:
     needs: eureka
     uses: ./.github/workflows/klero-financial-engine-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   pg:
     needs: eureka
     uses: ./.github/workflows/klero-pg-service.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.backend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
   frontend_user:
+    needs: resolve
     uses: ./.github/workflows/klero-frontend-user.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.frontend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.frontend_cid }}
 
   frontend_admin:
+    needs: resolve
     uses: ./.github/workflows/klero-frontend-admin.yaml
     secrets: inherit
     with:
-      commit_id: ${{ inputs.frontend_commit_id }}
+      commit_id: ${{ needs.resolve.outputs.frontend_cid }}
