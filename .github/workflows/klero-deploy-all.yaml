@@ -12,14 +12,14 @@ name: klero deploy all services
 on:
   workflow_dispatch:
     inputs:
-      backend_commit_id:
+      backend_commit_id: 
         description: "Commit SHA in klero-backend to deploy to ALL backend services (blank = HEAD)"
         required: false
-        default: ""
+        default: f15ca8e984cb8603bc936dacee8e830ea67495c0
       frontend_commit_id:
         description: "Commit SHA in klero-frontend to deploy to BOTH frontend apps (blank = HEAD)"
         required: false
-        default: ""
+        default: dc2a2d905da52e3419aa0efdac768601d6adeeea
 
 jobs:
   eureka:
