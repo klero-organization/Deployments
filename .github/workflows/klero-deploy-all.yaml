@@ -14,7 +14,7 @@ env:
   # full deploy of every service at these commits - same edit-and-push
   # pattern as the individual service workflows. Leave blank to deploy that
   # repo's services at HEAD instead.
-  BACKEND_COMMIT_ID: f15ca8e984cb8603bc936dacee8e830ea67495c0
+  BACKEND_COMMIT_ID: 3e90c58b379c58b8cdafd9ad74bdd6f2fee5ccce
   FRONTEND_COMMIT_ID: dc2a2d905da52e3419aa0efdac768601d6adeeea
 
 on:
