@@ -14,7 +14,7 @@ on:
       commit_id:
         description: "Target commit ID from klero-frontend (paste commit SHA here - REQUIRED)"
         required: true
-        default: ""
+        default: 9885b029645d8ac9661a74d443f0f1c29d65e828
       build_type:
         description: "APK Build Type (release or debug)"
         required: true
