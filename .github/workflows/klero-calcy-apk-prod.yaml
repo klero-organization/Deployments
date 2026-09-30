@@ -1,0 +1,234 @@
+name: "📱 Klero Calcy APK - Build & Deploy to PROD"
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (paste commit SHA here - REQUIRED)"
+        required: true
+        default: 9885b029645d8ac9661a74d443f0f1c29d65e828
+      build_type:
+        description: "APK Build Type (release or debug)"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  REPO_FRONTEND: "klero-organization/klero-frontend"
+  PROD_APK_DIR: "/home/ubuntu/klero-apks"
+  SSH_PORT: 22
+
+jobs:
+  setup:
+    name: "🔧 Validate Commit & Setup Tag"
+    runs-on: ubuntu-latest
+    outputs:
+      sha4: ${{ steps.tag.outputs.SHA4 }}
+      commit_id: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+    steps:
+      - name: Validate & Resolve Commit ID
+        id: resolve_commit
+        run: |
+          TARGET_CID="${{ github.event.inputs.commit_id }}"
+          # Trim whitespace
+          TARGET_CID=$(echo "$TARGET_CID" | tr -d ' ')
+          if [ -z "$TARGET_CID" ]; then
+            echo "❌ Error: commit_id is strictly REQUIRED to trigger this workflow!"
+            exit 1
+          fi
+          echo "EFFECTIVE_COMMIT_ID=${TARGET_CID}" >> $GITHUB_OUTPUT
+          echo "🎯 Validated Target Commit ID: ${TARGET_CID}"
+
+      - name: 📥 Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: 🔄 Reset to Target Commit ID
+        working-directory: klero-frontend
+        env:
+          TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+        run: |
+          git fetch --all
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found in repository!" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          FULL_SHA=$(git rev-parse HEAD)
+          echo "✅ Successfully checked out commit: ${FULL_SHA}"
+
+      - name: 🏷️ Set Short Tag (First 4 chars)
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "SHA4=${SHA4}"
+
+  build_apk:
+    name: "🔨 Build Calcy APK"
+    runs-on: ubuntu-latest
+    needs: setup
+    outputs:
+      apk_name: ${{ steps.bundle.outputs.APK_NAME }}
+
+    steps:
+      - name: 📥 Checkout klero-frontend at Commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          ref: ${{ needs.setup.outputs.commit_id }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: ☕ Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: 📱 Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 🟢 Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: klero-frontend/package.json
+
+      - name: ⚙️ Configure Monorepo & Prebuild Settings
+        working-directory: klero-frontend
+        run: |
+          # 1. Ensure klero-calcy is declared in monorepo workspaces
+          node -e '
+            const p = require("./package.json");
+            if (!p.workspaces) p.workspaces = [];
+            if (!p.workspaces.includes("klero-calcy")) {
+              p.workspaces.push("klero-calcy");
+              require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));
+              console.log("✅ Added klero-calcy to monorepo workspaces");
+            }
+          '
+
+          # 2. Ensure Android package identifier and versionCode are set in app.json
+          node -e '
+            const appPath = "./klero-calcy/app.json";
+            const app = require(appPath);
+            app.expo = app.expo || {};
+            app.expo.android = app.expo.android || {};
+            if (!app.expo.android.package) {
+              app.expo.android.package = "com.klero.calcy";
+            }
+            if (!app.expo.android.versionCode) {
+              app.expo.android.versionCode = 1;
+            }
+            require("fs").writeFileSync(appPath, JSON.stringify(app, null, 2));
+            console.log("✅ Configured android.package:", app.expo.android.package);
+          '
+
+          # 3. Install Monorepo Dependencies
+          npm install --legacy-peer-deps --ignore-scripts
+
+      - name: 🛠️ Prebuild Native Android Project
+        working-directory: klero-frontend/klero-calcy
+        run: |
+          npx expo prebuild --platform android --clean --no-install
+
+      - name: 🚀 Compile APK with Gradle
+        id: bundle
+        working-directory: klero-frontend/klero-calcy/android
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          chmod +x gradlew
+          if [ "$BUILD_TYPE" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon
+            RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          else
+            ./gradlew assembleDebug --no-daemon
+            RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          fi
+
+          if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
+            echo "❌ APK build output not found!"
+            exit 1
+          fi
+
+          FINAL_APK_NAME="klero-calcy-${SHA4}-${BUILD_TYPE}.apk"
+          cp "$RAW_APK" "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
+          echo "APK_NAME=${FINAL_APK_NAME}" >> $GITHUB_OUTPUT
+          echo "✅ Built APK: ${FINAL_APK_NAME}"
+          ls -lh "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
+
+      - name: 📤 Upload APK Artifact to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.APK_NAME }}
+          path: ${{ github.workspace }}/${{ steps.bundle.outputs.APK_NAME }}
+          retention-days: 30
+
+  deploy_to_prod:
+    name: "🚀 Deploy APK to PROD Server"
+    runs-on: ubuntu-latest
+    needs: [setup, build_apk]
+    steps:
+      - name: 📥 Download Built APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build_apk.outputs.apk_name }}
+          path: ./artifacts
+
+      - name: 🔑 Set up SSH (Exact PROD Secrets)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_PROD || secrets.SSH_HOST_KLERO_PROD || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_PROD || secrets.SSH_USERNAME_KLERO_PROD || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
+        run: |
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ Error: SSH host or private key secret is missing!"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+          EOF
+
+      - name: 📦 Transfer APK & Update Symlink on PROD
+        env:
+          APK_NAME: ${{ needs.build_apk.outputs.apk_name }}
+          PROD_DIR: ${{ env.PROD_APK_DIR }}
+        run: |
+          echo "📁 Ensuring directory exists on PROD server: ${PROD_DIR}"
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target "mkdir -p ${PROD_DIR}"
+
+          echo "🚀 Transferring ${APK_NAME} to target:${PROD_DIR}/"
+          scp ./artifacts/${APK_NAME} target:${PROD_DIR}/${APK_NAME}
+
+          echo "🔗 Updating symlink to latest APK..."
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s << EOSSH
+            cd "${PROD_DIR}"
+            ln -sf "${APK_NAME}" "klero-calcy-latest.apk"
+            echo ""
+            echo "✅ Current APKs in ${PROD_DIR}:"
+            ls -lh "${PROD_DIR}"
+          EOSSH
