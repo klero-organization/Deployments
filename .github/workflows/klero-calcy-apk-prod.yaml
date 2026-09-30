@@ -140,10 +140,13 @@ jobs:
         run: |
           chmod +x gradlew
 
-          # ARM-only build (skips 20+ min of x86 emulator compilation)
-          echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> gradle.properties
-          echo "org.gradle.parallel=true" >> gradle.properties
-          echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
+          # Ensure gradle.properties ends with a newline before appending custom properties
+          # to prevent corrupting expo-modules autolinking JSON array properties
+          printf "\norg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m\n" >> gradle.properties
+          printf "org.gradle.parallel=true\n" >> gradle.properties
+          printf "reactNativeArchitectures=arm64-v8a,armeabi-v7a\n" >> gradle.properties
+          echo "📄 Tail of gradle.properties:"
+          tail -n 10 gradle.properties
 
           GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon --stacktrace --info"
           if [ "$BUILD_TYPE" = "release" ]; then
