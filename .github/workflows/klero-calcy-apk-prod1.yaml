@@ -1,0 +1,235 @@
+name: "📱 Klero Calcy APK - Build & Deploy to PROD"
+
+on:
+  push:
+    branches: [klero]
+    paths:
+      - '.github/workflows/klero-calcy-apk-prod1.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID or branch from klero-frontend (leave blank to build dev_1.1)"
+        required: false
+        default: ""
+      build_type:
+        description: "APK Build Type (release or debug)"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  REPO_FRONTEND: "klero-organization/klero-frontend"
+  PROD_APK_DIR: "/home/ubuntu/klero-apks"
+  SSH_PORT: 22
+
+jobs:
+  build_apk:
+    name: "🔨 Build Calcy APK"
+    runs-on: ubuntu-latest
+    outputs:
+      sha4: ${{ steps.tag.outputs.SHA4 }}
+      apk_name: ${{ steps.bundle.outputs.APK_NAME }}
+
+    steps:
+      - name: 📥 Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO_FRONTEND }}
+          ref: ${{ github.event.inputs.commit_id != '' && github.event.inputs.commit_id || 'dev_1.1' }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          path: klero-frontend
+
+      - name: 🏷️ Set Short Tag
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          FULL_SHA=$(git rev-parse HEAD)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "Building commit: ${FULL_SHA} (${SHA4})"
+
+      - name: ☕ Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: 📱 Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: 🟢 Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: klero-frontend/package.json
+
+      - name: ⚙️ Configure Monorepo & Prebuild Settings
+        working-directory: klero-frontend
+        run: |
+          # 1. Exclude klero-admin to prevent Tailwind CSS v4 from conflicting with NativeWind (which strictly requires Tailwind v3)
+          rm -rf klero-admin
+          node -e '
+            const p = require("./package.json");
+            p.workspaces = (p.workspaces || []).filter(w => w !== "klero-admin");
+            if (!p.workspaces.includes("klero-calcy")) {
+              p.workspaces.push("klero-calcy");
+            }
+            require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));
+            console.log("✅ Excluded klero-admin and ensured klero-calcy in workspaces:", p.workspaces);
+          '
+
+          # 2. Ensure Android package identifier and versionCode are set in app.json
+          node -e '
+            const appPath = "./klero-calcy/app.json";
+            const app = require(appPath);
+            app.expo = app.expo || {};
+            app.expo.android = app.expo.android || {};
+            if (!app.expo.android.package) {
+              app.expo.android.package = "com.klero.calcy";
+            }
+            if (!app.expo.android.versionCode) {
+              app.expo.android.versionCode = 1;
+            }
+            require("fs").writeFileSync(appPath, JSON.stringify(app, null, 2));
+            console.log("✅ Configured android.package:", app.expo.android.package);
+          '
+
+          # 3. Disable DTS build and set ignoreDeprecations to prevent TS5101 (baseUrl deprecation in TypeScript 6)
+          node -e '
+            const fs = require("fs");
+            const tsupConfig = "packages/tools/tsup.config.ts";
+            if (fs.existsSync(tsupConfig)) {
+              fs.writeFileSync(tsupConfig, fs.readFileSync(tsupConfig, "utf8").replace("dts: true", "dts: false"));
+              console.log("✅ Disabled DTS build in packages/tools/tsup.config.ts");
+            }
+            const toolsPkg = "packages/tools/package.json";
+            if (fs.existsSync(toolsPkg)) {
+              const p = JSON.parse(fs.readFileSync(toolsPkg));
+              if (p.scripts && p.scripts.prepare) {
+                delete p.scripts.prepare;
+                fs.writeFileSync(toolsPkg, JSON.stringify(p, null, 2));
+                console.log("✅ Removed premature prepare script from packages/tools");
+              }
+            }
+            ["packages/tools/tsconfig.json", "klero-calcy/tsconfig.json"].forEach(f => {
+              if (fs.existsSync(f)) {
+                const c = JSON.parse(fs.readFileSync(f));
+                c.compilerOptions = c.compilerOptions || {};
+                c.compilerOptions.ignoreDeprecations = "6.0";
+                fs.writeFileSync(f, JSON.stringify(c, null, 2));
+              }
+            });
+            console.log("✅ Added ignoreDeprecations to tsconfig.json");
+          '
+
+          # 4. Install Monorepo Dependencies
+          npm install --legacy-peer-deps --ignore-scripts
+
+          # 5. Strictly enforce Tailwind CSS v3 for NativeWind (at workspace root and app level)
+          npm install tailwindcss@3.4.17 --save-exact --ignore-scripts
+          (cd klero-calcy && npm install tailwindcss@3.4.17 --save-exact --ignore-scripts)
+
+          # 6. Build internal shared packages (@klero/tools) with tsup
+          (cd packages/tools && npx tsup --no-dts) || true
+
+      - name: 🛠️ Prebuild Native Android Project
+        working-directory: klero-frontend/klero-calcy
+        run: |
+          npx expo prebuild --platform android --clean --no-install
+
+      - name: 🚀 Compile APK with Gradle
+        id: bundle
+        working-directory: klero-frontend/klero-calcy/android
+        env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          chmod +x gradlew
+          # Optimize Gradle performance & compile only for physical device architectures (skips 15-20 mins of x86 PC emulator compilation)
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> gradle.properties
+          echo "org.gradle.parallel=true" >> gradle.properties
+          echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
+
+          GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon"
+          if [ "$BUILD_TYPE" = "release" ]; then
+            ./gradlew assembleRelease $GRADLE_FLAGS
+            RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          else
+            ./gradlew assembleDebug $GRADLE_FLAGS
+            RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          fi
+
+          if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
+            echo "❌ APK build output not found!"
+            exit 1
+          fi
+
+          FINAL_APK_NAME="klero-calcy-${SHA4}-${BUILD_TYPE}.apk"
+          cp "$RAW_APK" "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
+          echo "APK_NAME=${FINAL_APK_NAME}" >> $GITHUB_OUTPUT
+          echo "✅ Built APK: ${FINAL_APK_NAME}"
+          ls -lh "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
+
+      - name: 📤 Upload APK Artifact to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.APK_NAME }}
+          path: ${{ github.workspace }}/${{ steps.bundle.outputs.APK_NAME }}
+          retention-days: 30
+
+  deploy_to_prod:
+    name: "🚀 Deploy APK to Production Server"
+    runs-on: ubuntu-latest
+    needs: build_apk
+    steps:
+      - name: 📥 Download Built APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build_apk.outputs.apk_name }}
+          path: ./artifacts
+
+      - name: 🔑 Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_PROD || secrets.SSH_HOST_KLERO_PROD || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_PROD || secrets.SSH_USERNAME_KLERO_PROD || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+          EOF
+
+      - name: 📦 Transfer APK & Update Symlink on PROD
+        env:
+          APK_NAME: ${{ needs.build_apk.outputs.apk_name }}
+          PROD_DIR: ${{ env.PROD_APK_DIR }}
+        run: |
+          echo "📁 Ensuring directory exists on PROD server: ${PROD_DIR}"
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target "mkdir -p ${PROD_DIR}"
+
+          echo "🚀 Transferring ${APK_NAME} to target:${PROD_DIR}/"
+          scp ./artifacts/${APK_NAME} target:${PROD_DIR}/${APK_NAME}
+
+          echo "🔗 Updating symlink to latest APK..."
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s << EOSSH
+            cd "${PROD_DIR}"
+            ln -sf "${APK_NAME}" "klero-calcy-latest.apk"
+            echo ""
+            echo "✅ Current APKs in ${PROD_DIR}:"
+            ls -lh "${PROD_DIR}"
+          EOSSH
