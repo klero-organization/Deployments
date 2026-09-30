@@ -2,13 +2,13 @@ name: "📱 Klero Calcy APK - Build & Deploy to PROD"
 
 on:
   push:
-    branches: [klero]
+    branches: [klero-prod]
     paths:
       - '.github/workflows/klero-calcy-apk-prod.yaml'
   workflow_dispatch:
     inputs:
       commit_id:
-        description: "Target commit ID or branch from klero-frontend (leave blank to build dev_1.1)"
+        description: "Target commit ID from klero-frontend (paste commit SHA here, or leave blank to use env.COMMIT_ID)"
         required: false
         default: ""
       build_type:
@@ -21,7 +21,10 @@ on:
           - debug
 
 env:
-  REPO_FRONTEND: "klero-organization/klero-frontend"
+  # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch)
+  COMMIT_ID: 9885b029645d8ac9661a74d443f0f1c29d65e828
+  # Source repository
+  REPO_FRONTEND: klero-organization/klero-frontend
   PROD_APK_DIR: "/home/ubuntu/klero-apks"
   SSH_PORT: 22
 
@@ -30,52 +33,72 @@ jobs:
     name: "🔨 Build Calcy APK"
     runs-on: ubuntu-latest
     outputs:
-      sha4: ${{ steps.tag.outputs.SHA4 }}
       apk_name: ${{ steps.bundle.outputs.APK_NAME }}
-
     steps:
+      - name: Resolve Effective Commit ID
+        id: resolve_commit
+        run: |
+          INPUT_CID="${{ github.event.inputs.commit_id }}"
+          ENV_CID="${{ env.COMMIT_ID }}"
+          EFFECTIVE="${INPUT_CID:-$ENV_CID}"
+          if [ -z "$EFFECTIVE" ]; then
+            echo "❌ Error: COMMIT_ID is required! Please paste commit SHA in env.COMMIT_ID or pass it via workflow_dispatch input."
+            exit 1
+          fi
+          echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
+          echo "🎯 Target Commit ID: ${EFFECTIVE}"
+
       - name: 📥 Checkout klero-frontend
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO_FRONTEND }}
-          ref: ${{ github.event.inputs.commit_id != '' && github.event.inputs.commit_id || 'dev_1.1' }}
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
           path: klero-frontend
 
-      - name: 🏷️ Set Short Tag
+      - name: Reset to COMMIT_ID
+        working-directory: klero-frontend
+        env:
+          TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+        run: |
+          git fetch --all
+          git checkout "$TARGET_CID" || (
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found" && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          )
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - name: 🏷️ Set image tag (First 4 digits of commit)
         id: tag
         working-directory: klero-frontend
         run: |
           SHA4=$(git rev-parse HEAD | cut -c1-4)
-          FULL_SHA=$(git rev-parse HEAD)
           echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
-          echo "Building commit: ${FULL_SHA} (${SHA4})"
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
 
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: 📱 Accept Android SDK Licenses
-        run: |
-          yes | sdkmanager --licenses || true
-
-      - name: 🟢 Set up Node.js 20
+      - name: 📦 Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: "npm"
-          cache-dependency-path: klero-frontend/package.json
 
-      - name: ⚙️ Configure Monorepo & Prebuild Settings
+      - name: 🤖 Accept Android SDK Licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: 🔧 Prepare Monorepo & Install Dependencies
         working-directory: klero-frontend
         run: |
           # 1. Exclude klero-admin to prevent Tailwind CSS v4 from conflicting with NativeWind (which strictly requires Tailwind v3)
           rm -rf klero-admin
           node -e '
             const p = require("./package.json");
-            p.workspaces = (p.workspaces || []).filter(w => w !== "klero-admin");
+            p.workspaces = p.workspaces.filter(w => w !== "klero-admin");
             if (!p.workspaces.includes("klero-calcy")) {
               p.workspaces.push("klero-calcy");
             }
@@ -103,10 +126,11 @@ jobs:
             }
             if (!fs.existsSync("./klero-calcy/assets/klero-splash.png") && fs.existsSync("./klero-user/assets/klero-splash.png")) {
               fs.copyFileSync("./klero-user/assets/klero-splash.png", "./klero-calcy/assets/klero-splash.png");
-              console.log("✅ Copied splash logo to klero-calcy/assets/klero-splash.png");
+              console.log("✅ Copied splash logo from klero-user to klero-calcy/assets/klero-splash.png");
             }
             if (!fs.existsSync("./klero-calcy/assets/icon.png") && fs.existsSync("./klero-user/assets/icon.png")) {
               fs.copyFileSync("./klero-user/assets/icon.png", "./klero-calcy/assets/icon.png");
+              console.log("✅ Copied icon from klero-user to klero-calcy/assets/icon.png");
             }
 
             // Configure expo-splash-screen plugin with the copied splash image
@@ -119,7 +143,7 @@ jobs:
                 }
               }
             }
-            require("fs").writeFileSync(appPath, JSON.stringify(app, null, 2));
+            fs.writeFileSync(appPath, JSON.stringify(app, null, 2));
             console.log("✅ Configured android.package:", app.expo.android.package);
           '
 
@@ -165,18 +189,15 @@ jobs:
         working-directory: klero-frontend/klero-calcy
         run: |
           npx expo prebuild --platform android --clean --no-install
+
           # Guarantee splashscreen_logo drawable exists to prevent AAPT2 resource linking failure
-          mkdir -p android/app/src/main/res/drawable
-          if [ ! -f android/app/src/main/res/drawable/splashscreen_logo.png ] && [ ! -f android/app/src/main/res/drawable/splashscreen_logo.xml ]; then
-            cat << 'EOF' > android/app/src/main/res/drawable/splashscreen_logo.xml
-            <vector xmlns:android="http://schemas.android.com/apk/res/android"
-                android:width="200dp"
-                android:height="200dp"
-                android:viewportWidth="200"
-                android:viewportHeight="200">
-            </vector>
-            EOF
+          DRAWABLE_DIR="android/app/src/main/res/drawable"
+          mkdir -p "$DRAWABLE_DIR"
+          if [ ! -f "$DRAWABLE_DIR/splashscreen_logo.png" ] && [ ! -f "$DRAWABLE_DIR/splashscreen_logo.xml" ]; then
+            echo '<?xml version="1.0" encoding="utf-8"?><vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="200dp" android:height="200dp" android:viewportWidth="200" android:viewportHeight="200"></vector>' > "$DRAWABLE_DIR/splashscreen_logo.xml"
             echo "✅ Created fallback splashscreen_logo.xml"
+          else
+            echo "✅ splashscreen_logo drawable already exists"
           fi
 
       - name: 🚀 Compile APK with Gradle
@@ -187,7 +208,8 @@ jobs:
           SHA4: ${{ steps.tag.outputs.SHA4 }}
         run: |
           chmod +x gradlew
-          # Optimize Gradle performance & compile only for physical device architectures (skips 15-20 mins of x86 PC emulator compilation)
+
+          # Optimize: compile only for physical device architectures (skips 20+ mins of x86 emulator compilation)
           echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.parallel=true" >> gradle.properties
           echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
