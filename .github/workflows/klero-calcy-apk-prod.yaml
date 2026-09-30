@@ -22,7 +22,7 @@ on:
 
 env:
   # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch)
-  COMMIT_ID: 9885b029645d8ac9661a74d443f0f1c29d65e828
+  COMMIT_ID: 9faaccd27a7cc08635520ec828ba803f259e9841
   # Source repository
   REPO_FRONTEND: klero-organization/klero-frontend
   PROD_APK_DIR: "/home/ubuntu/klero-apks"
@@ -41,12 +41,8 @@ jobs:
           INPUT_CID="${{ github.event.inputs.commit_id }}"
           ENV_CID="${{ env.COMMIT_ID }}"
           EFFECTIVE="${INPUT_CID:-$ENV_CID}"
-          if [ -z "$EFFECTIVE" ]; then
-            echo "❌ Error: COMMIT_ID is required!"
-            exit 1
-          fi
           echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
-          echo "🎯 Target Commit ID: ${EFFECTIVE}"
+          echo "🎯 Target Commit ID: ${EFFECTIVE:-latest HEAD}"
 
       - name: 📥 Checkout klero-frontend
         uses: actions/checkout@v4
@@ -62,11 +58,13 @@ jobs:
           TARGET_CID: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
         run: |
           git fetch --all
-          git checkout "$TARGET_CID" || (
-            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
-            [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found" && exit 1
-            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
-          )
+          if [ -n "$TARGET_CID" ]; then
+            git checkout "$TARGET_CID" || (
+              BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+              [ -z "$BRANCH" ] && echo "❌ Commit $TARGET_CID not found" && exit 1
+              git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+            )
+          fi
           echo "✅ Checked out commit: $(git rev-parse HEAD)"
 
       - name: 🏷️ Set image tag (First 4 digits of commit)
@@ -92,76 +90,33 @@ jobs:
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: 🔧 Install klero-calcy Dependencies
-        working-directory: klero-frontend
+        working-directory: klero-frontend/klero-calcy
         run: |
           set -e
 
-          # 1. Configure app.json: Android package, versionCode, splash screen
+          # 1. Configure app.json: Android package & versionCode
           node -e '
             const fs = require("fs");
-            const appPath = "./klero-calcy/app.json";
+            const appPath = "./app.json";
             const app = JSON.parse(fs.readFileSync(appPath, "utf8"));
             app.expo = app.expo || {};
             app.expo.android = app.expo.android || {};
             if (!app.expo.android.package) app.expo.android.package = "com.klero.calcy";
             if (!app.expo.android.versionCode) app.expo.android.versionCode = 1;
-            fs.mkdirSync("./klero-calcy/assets", { recursive: true });
-            [["klero-splash.png","klero-splash.png"],["icon.png","icon.png"]].forEach(([s,d]) => {
-              const src = "./klero-user/assets/" + s, dst = "./klero-calcy/assets/" + d;
-              if (!fs.existsSync(dst) && fs.existsSync(src)) {
-                fs.copyFileSync(src, dst);
-                console.log("✅ Copied", s);
-              }
-            });
-            if (Array.isArray(app.expo.plugins)) {
-              app.expo.plugins.forEach(p => {
-                if (Array.isArray(p) && p[0] === "expo-splash-screen" && p[1] && fs.existsSync("./klero-calcy/assets/klero-splash.png")) {
-                  p[1].image = "./assets/klero-splash.png";
-                }
-              });
-            }
             fs.writeFileSync(appPath, JSON.stringify(app, null, 2));
             console.log("✅ android.package:", app.expo.android.package);
           '
 
-          # 2. Delete stale lockfiles (source-map-js@1.2.2 was yanked from npm)
-          rm -f klero-calcy/package-lock.json
-
-          # 3. Install klero-calcy dependencies standalone
-          cd klero-calcy
-          npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund
-          npm install tailwindcss@3.4.17 --save-exact --ignore-scripts --no-audit --no-fund
-          cd ..
+          # 2. Clean install dependencies standalone for klero-calcy
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --no-audit --no-fund
+          npm install tailwindcss@3.4.17 --save-exact --no-audit --no-fund
           echo "✅ klero-calcy dependencies installed"
-
-          # 4. Metro config expects react-native and react-native-svg at the
-          #    workspace root (klero-frontend/node_modules/). Create symlinks
-          #    pointing to klero-calcy's installed copies.
-          mkdir -p node_modules
-          ln -sf ../klero-calcy/node_modules/react-native node_modules/react-native
-          ln -sf ../klero-calcy/node_modules/react-native-svg node_modules/react-native-svg
-          echo "✅ Root symlinks created for Metro"
-
-          # 5. Verify all Metro module paths exist
-          node -e '
-            const fs = require("fs");
-            const checks = [
-              ["klero-calcy/node_modules/react", "react in klero-calcy"],
-              ["klero-calcy/node_modules/react-dom", "react-dom in klero-calcy"],
-              ["node_modules/react-native", "react-native at root"],
-              ["node_modules/react-native-svg", "react-native-svg at root"],
-            ];
-            let ok = true;
-            checks.forEach(([p, label]) => {
-              if (fs.existsSync(p)) { console.log("  ✅", label); }
-              else { console.error("  ❌ MISSING:", label, "at", p); ok = false; }
-            });
-            if (!ok) process.exit(1);
-            console.log("✅ All Metro module paths verified");
-          '
 
       - name: 🛠️ Prebuild Native Android Project
         working-directory: klero-frontend/klero-calcy
+        env:
+          NODE_PATH: ${{ github.workspace }}/klero-frontend/klero-calcy/node_modules:${{ github.workspace }}/klero-frontend/node_modules
         run: |
           npx expo prebuild --platform android --clean --no-install
 
@@ -181,6 +136,7 @@ jobs:
         env:
           BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
           SHA4: ${{ steps.tag.outputs.SHA4 }}
+          NODE_PATH: ${{ github.workspace }}/klero-frontend/klero-calcy/node_modules:${{ github.workspace }}/klero-frontend/node_modules
         run: |
           chmod +x gradlew
 
@@ -189,7 +145,7 @@ jobs:
           echo "org.gradle.parallel=true" >> gradle.properties
           echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
 
-          GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon --stacktrace"
+          GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon --stacktrace --info"
           if [ "$BUILD_TYPE" = "release" ]; then
             ./gradlew assembleRelease $GRADLE_FLAGS
             RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
