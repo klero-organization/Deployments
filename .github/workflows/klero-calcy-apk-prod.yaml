@@ -42,7 +42,7 @@ jobs:
           ENV_CID="${{ env.COMMIT_ID }}"
           EFFECTIVE="${INPUT_CID:-$ENV_CID}"
           if [ -z "$EFFECTIVE" ]; then
-            echo "❌ Error: COMMIT_ID is required! Please paste commit SHA in env.COMMIT_ID or pass it via workflow_dispatch input."
+            echo "❌ Error: COMMIT_ID is required!"
             exit 1
           fi
           echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
@@ -91,23 +91,12 @@ jobs:
       - name: 🤖 Accept Android SDK Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: 🔧 Prepare Monorepo & Install Dependencies
+      - name: 🔧 Install klero-calcy Dependencies
         working-directory: klero-frontend
         run: |
           set -e
 
-          # 1. Remove klero-admin (Tailwind v4 conflicts with NativeWind's Tailwind v3 requirement)
-          rm -rf klero-admin
-
-          # 2. Rewrite workspaces to include klero-calcy and exclude klero-admin
-          node -e '
-            const p = require("./package.json");
-            p.workspaces = ["packages/*", "klero-user", "klero-calcy"];
-            require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));
-            console.log("✅ Workspaces:", p.workspaces);
-          '
-
-          # 3. Ensure Android package identifier, versionCode, and splash screen image in app.json
+          # 1. Configure app.json: Android package, versionCode, splash screen
           node -e '
             const fs = require("fs");
             const appPath = "./klero-calcy/app.json";
@@ -116,28 +105,18 @@ jobs:
             app.expo.android = app.expo.android || {};
             if (!app.expo.android.package) app.expo.android.package = "com.klero.calcy";
             if (!app.expo.android.versionCode) app.expo.android.versionCode = 1;
-
-            // Copy splash and icon assets from klero-user if missing in klero-calcy
-            ["assets"].forEach(d => fs.mkdirSync("./klero-calcy/" + d, { recursive: true }));
-            [
-              ["klero-splash.png", "klero-splash.png"],
-              ["icon.png", "icon.png"]
-            ].forEach(([src, dst]) => {
-              const s = "./klero-user/assets/" + src;
-              const d = "./klero-calcy/assets/" + dst;
-              if (!fs.existsSync(d) && fs.existsSync(s)) {
-                fs.copyFileSync(s, d);
-                console.log("✅ Copied", src, "to klero-calcy/assets/");
+            fs.mkdirSync("./klero-calcy/assets", { recursive: true });
+            [["klero-splash.png","klero-splash.png"],["icon.png","icon.png"]].forEach(([s,d]) => {
+              const src = "./klero-user/assets/" + s, dst = "./klero-calcy/assets/" + d;
+              if (!fs.existsSync(dst) && fs.existsSync(src)) {
+                fs.copyFileSync(src, dst);
+                console.log("✅ Copied", s);
               }
             });
-
-            // Set splash image path in expo-splash-screen plugin config
             if (Array.isArray(app.expo.plugins)) {
               app.expo.plugins.forEach(p => {
-                if (Array.isArray(p) && p[0] === "expo-splash-screen" && p[1]) {
-                  if (fs.existsSync("./klero-calcy/assets/klero-splash.png")) {
-                    p[1].image = "./assets/klero-splash.png";
-                  }
+                if (Array.isArray(p) && p[0] === "expo-splash-screen" && p[1] && fs.existsSync("./klero-calcy/assets/klero-splash.png")) {
+                  p[1].image = "./assets/klero-splash.png";
                 }
               });
             }
@@ -145,48 +124,48 @@ jobs:
             console.log("✅ android.package:", app.expo.android.package);
           '
 
-          # 4. Patch packages/tools: remove prepare script, disable DTS
+          # 2. Delete stale lockfiles (source-map-js@1.2.2 was yanked from npm)
+          rm -f klero-calcy/package-lock.json
+
+          # 3. Install klero-calcy dependencies standalone
+          cd klero-calcy
+          npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+          npm install tailwindcss@3.4.17 --save-exact --ignore-scripts --no-audit --no-fund
+          cd ..
+          echo "✅ klero-calcy dependencies installed"
+
+          # 4. Metro config expects react-native and react-native-svg at the
+          #    workspace root (klero-frontend/node_modules/). Create symlinks
+          #    pointing to klero-calcy's installed copies.
+          mkdir -p node_modules
+          ln -sf ../klero-calcy/node_modules/react-native node_modules/react-native
+          ln -sf ../klero-calcy/node_modules/react-native-svg node_modules/react-native-svg
+          echo "✅ Root symlinks created for Metro"
+
+          # 5. Verify all Metro module paths exist
           node -e '
             const fs = require("fs");
-            // Remove prepare lifecycle script that triggers premature tsup build
-            const pkgPath = "packages/tools/package.json";
-            if (fs.existsSync(pkgPath)) {
-              const p = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-              if (p.scripts && p.scripts.prepare) {
-                delete p.scripts.prepare;
-                fs.writeFileSync(pkgPath, JSON.stringify(p, null, 2));
-                console.log("✅ Removed prepare script from packages/tools");
-              }
-            }
-            // Disable DTS generation (avoids TS5101 baseUrl deprecation error)
-            const tsupPath = "packages/tools/tsup.config.ts";
-            if (fs.existsSync(tsupPath)) {
-              let c = fs.readFileSync(tsupPath, "utf8");
-              c = c.replace(/dts:\s*true/g, "dts: false");
-              fs.writeFileSync(tsupPath, c);
-              console.log("✅ Disabled DTS in tsup.config.ts");
-            }
+            const checks = [
+              ["klero-calcy/node_modules/react", "react in klero-calcy"],
+              ["klero-calcy/node_modules/react-dom", "react-dom in klero-calcy"],
+              ["node_modules/react-native", "react-native at root"],
+              ["node_modules/react-native-svg", "react-native-svg at root"],
+            ];
+            let ok = true;
+            checks.forEach(([p, label]) => {
+              if (fs.existsSync(p)) { console.log("  ✅", label); }
+              else { console.error("  ❌ MISSING:", label, "at", p); ok = false; }
+            });
+            if (!ok) process.exit(1);
+            console.log("✅ All Metro module paths verified");
           '
-
-          # 5. Install all monorepo dependencies (DO NOT use --ignore-scripts — native modules need postinstall)
-          npm install --legacy-peer-deps
-
-          # 6. Force Tailwind CSS v3 at root (overwrite any v4 that might have been hoisted)
-          npm install tailwindcss@3.4.17 --save-exact
-
-          # 7. Build @klero/tools (Metro needs dist/ to exist) — FAIL LOUDLY if this breaks
-          echo "📦 Building @klero/tools..."
-          cd packages/tools
-          npx tsup --no-dts
-          cd ../..
-          echo "✅ @klero/tools built successfully"
 
       - name: 🛠️ Prebuild Native Android Project
         working-directory: klero-frontend/klero-calcy
         run: |
           npx expo prebuild --platform android --clean --no-install
 
-          # Guarantee splashscreen_logo drawable exists (prevents AAPT2 resource linking failure)
+          # Guarantee splashscreen_logo drawable exists
           DRAWABLE_DIR="android/app/src/main/res/drawable"
           mkdir -p "$DRAWABLE_DIR"
           if [ ! -f "$DRAWABLE_DIR/splashscreen_logo.png" ] && [ ! -f "$DRAWABLE_DIR/splashscreen_logo.xml" ]; then
@@ -205,7 +184,7 @@ jobs:
         run: |
           chmod +x gradlew
 
-          # Optimize: compile only for physical device architectures (skips 20+ mins of x86 emulator builds)
+          # ARM-only build (skips 20+ min of x86 emulator compilation)
           echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> gradle.properties
           echo "org.gradle.parallel=true" >> gradle.properties
           echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
