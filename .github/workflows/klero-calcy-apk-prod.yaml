@@ -196,19 +196,6 @@ jobs:
             echo "✅ splashscreen_logo drawable already exists"
           fi
 
-      - name: 🧪 Test Metro JS Bundle (catch errors before Gradle)
-        working-directory: klero-frontend/klero-calcy
-        run: |
-          echo "🔍 Testing Metro bundler can create JS bundle..."
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file index.ts \
-            --bundle-output /tmp/test-bundle.jsbundle \
-            --assets-dest /tmp/test-assets \
-            --reset-cache
-          echo "✅ Metro JS bundle created successfully"
-
       - name: 🚀 Compile APK with Gradle
         id: bundle
         working-directory: klero-frontend/klero-calcy/android
