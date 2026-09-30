@@ -1,12 +1,20 @@
 name: "📱 Klero Calcy APK - Build & Deploy to PROD"
 
 on:
+  push:
+    branches: [klero]
+    paths:
+      - '.github/workflows/klero-calcy-apk-prod.yaml'
   workflow_dispatch:
     inputs:
+      branch:
+        description: "Branch in klero-frontend (e.g. dev_1.1)"
+        required: true
+        default: "dev_1.1"
       commit_id:
         description: "Target commit ID from klero-frontend (paste commit SHA here - REQUIRED)"
         required: true
-        default: 9885b029645d8ac9661a74d443f0f1c29d65e828
+        default: ""
       build_type:
         description: "APK Build Type (release or debug)"
         required: true
@@ -28,12 +36,19 @@ jobs:
     outputs:
       sha4: ${{ steps.tag.outputs.SHA4 }}
       commit_id: ${{ steps.resolve_commit.outputs.EFFECTIVE_COMMIT_ID }}
+      branch: ${{ steps.resolve_branch.outputs.BRANCH }}
     steps:
+      - name: Resolve Branch
+        id: resolve_branch
+        run: |
+          TARGET_BRANCH="${{ github.event.inputs.branch || 'dev_1.1' }}"
+          echo "BRANCH=${TARGET_BRANCH}" >> $GITHUB_OUTPUT
+          echo "🌿 Target Branch: ${TARGET_BRANCH}"
+
       - name: Validate & Resolve Commit ID
         id: resolve_commit
         run: |
           TARGET_CID="${{ github.event.inputs.commit_id }}"
-          # Trim whitespace
           TARGET_CID=$(echo "$TARGET_CID" | tr -d ' ')
           if [ -z "$TARGET_CID" ]; then
             echo "❌ Error: commit_id is strictly REQUIRED to trigger this workflow!"
@@ -46,6 +61,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO_FRONTEND }}
+          ref: ${{ steps.resolve_branch.outputs.BRANCH }}
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
