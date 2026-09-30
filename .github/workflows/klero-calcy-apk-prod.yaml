@@ -71,15 +71,16 @@ jobs:
       - name: ⚙️ Configure Monorepo & Prebuild Settings
         working-directory: klero-frontend
         run: |
-          # 1. Ensure klero-calcy is declared in monorepo workspaces
+          # 1. Exclude klero-admin to prevent Tailwind CSS v4 from conflicting with NativeWind (which strictly requires Tailwind v3)
+          rm -rf klero-admin
           node -e '
             const p = require("./package.json");
-            if (!p.workspaces) p.workspaces = [];
+            p.workspaces = (p.workspaces || []).filter(w => w !== "klero-admin");
             if (!p.workspaces.includes("klero-calcy")) {
               p.workspaces.push("klero-calcy");
-              require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));
-              console.log("✅ Added klero-calcy to monorepo workspaces");
             }
+            require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));
+            console.log("✅ Excluded klero-admin and ensured klero-calcy in workspaces:", p.workspaces);
           '
 
           # 2. Ensure Android package identifier and versionCode are set in app.json
@@ -100,6 +101,13 @@ jobs:
 
           # 3. Install Monorepo Dependencies
           npm install --legacy-peer-deps --ignore-scripts
+
+          # 4. Strictly enforce Tailwind CSS v3 for NativeWind (at workspace root and app level)
+          npm install tailwindcss@3.4.17 --save-exact
+          (cd klero-calcy && npm install tailwindcss@3.4.17 --save-exact)
+
+          # 5. Build internal shared packages if needed
+          (cd packages/tools && npx tsup --no-dts) || true
 
       - name: 🛠️ Prebuild Native Android Project
         working-directory: klero-frontend/klero-calcy
