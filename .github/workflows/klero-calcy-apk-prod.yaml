@@ -83,8 +83,9 @@ jobs:
             console.log("✅ Excluded klero-admin and ensured klero-calcy in workspaces:", p.workspaces);
           '
 
-          # 2. Ensure Android package identifier and versionCode are set in app.json
+          # 2. Ensure Android package identifier, versionCode, and splash screen assets are set in app.json
           node -e '
+            const fs = require("fs");
             const appPath = "./klero-calcy/app.json";
             const app = require(appPath);
             app.expo = app.expo || {};
@@ -94,6 +95,29 @@ jobs:
             }
             if (!app.expo.android.versionCode) {
               app.expo.android.versionCode = 1;
+            }
+
+            // Copy branded splash screen and icon assets from klero-user if missing in klero-calcy
+            if (!fs.existsSync("./klero-calcy/assets")) {
+              fs.mkdirSync("./klero-calcy/assets", { recursive: true });
+            }
+            if (!fs.existsSync("./klero-calcy/assets/klero-splash.png") && fs.existsSync("./klero-user/assets/klero-splash.png")) {
+              fs.copyFileSync("./klero-user/assets/klero-splash.png", "./klero-calcy/assets/klero-splash.png");
+              console.log("✅ Copied splash logo to klero-calcy/assets/klero-splash.png");
+            }
+            if (!fs.existsSync("./klero-calcy/assets/icon.png") && fs.existsSync("./klero-user/assets/icon.png")) {
+              fs.copyFileSync("./klero-user/assets/icon.png", "./klero-calcy/assets/icon.png");
+            }
+
+            // Configure expo-splash-screen plugin with the copied splash image
+            if (Array.isArray(app.expo.plugins)) {
+              for (const p of app.expo.plugins) {
+                if (Array.isArray(p) && p[0] === "expo-splash-screen" && p[1]) {
+                  if (fs.existsSync("./klero-calcy/assets/klero-splash.png")) {
+                    p[1].image = "./assets/klero-splash.png";
+                  }
+                }
+              }
             }
             require("fs").writeFileSync(appPath, JSON.stringify(app, null, 2));
             console.log("✅ Configured android.package:", app.expo.android.package);
@@ -141,6 +165,19 @@ jobs:
         working-directory: klero-frontend/klero-calcy
         run: |
           npx expo prebuild --platform android --clean --no-install
+          # Guarantee splashscreen_logo drawable exists to prevent AAPT2 resource linking failure
+          mkdir -p android/app/src/main/res/drawable
+          if [ ! -f android/app/src/main/res/drawable/splashscreen_logo.png ] && [ ! -f android/app/src/main/res/drawable/splashscreen_logo.xml ]; then
+            cat << 'EOF' > android/app/src/main/res/drawable/splashscreen_logo.xml
+            <vector xmlns:android="http://schemas.android.com/apk/res/android"
+                android:width="200dp"
+                android:height="200dp"
+                android:viewportWidth="200"
+                android:viewportHeight="200">
+            </vector>
+            EOF
+            echo "✅ Created fallback splashscreen_logo.xml"
+          fi
 
       - name: 🚀 Compile APK with Gradle
         id: bundle
@@ -150,11 +187,17 @@ jobs:
           SHA4: ${{ steps.tag.outputs.SHA4 }}
         run: |
           chmod +x gradlew
+          # Optimize Gradle performance & compile only for physical device architectures (skips 15-20 mins of x86 PC emulator compilation)
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m" >> gradle.properties
+          echo "org.gradle.parallel=true" >> gradle.properties
+          echo "reactNativeArchitectures=arm64-v8a,armeabi-v7a" >> gradle.properties
+
+          GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon"
           if [ "$BUILD_TYPE" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon
+            ./gradlew assembleRelease $GRADLE_FLAGS
             RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           else
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug $GRADLE_FLAGS
             RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
 
