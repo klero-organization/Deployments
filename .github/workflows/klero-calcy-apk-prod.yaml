@@ -188,9 +188,9 @@ jobs:
 
       - name: 🔑 Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
-          SSH_HOST: ${{ secrets.SSH_HOST_PROD || secrets.SSH_HOST_KLERO_PROD || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_PROD || secrets.SSH_USERNAME_KLERO_PROD || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
+          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST}}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME}}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
