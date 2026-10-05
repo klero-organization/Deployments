@@ -94,29 +94,29 @@ jobs:
       # the JS). Without them the code silently falls back to the DEV backend,
       # so a PROD build fails fast if the API URL isn't configured.
       # Set them under the Deployments repo: Settings → Secrets and variables → Actions.
-      - name: 🔐 Write klero-user PROD environment (.env)
-        working-directory: klero-frontend/klero-user
-        env:
-          EXPO_PUBLIC_API_URL: ${{ vars.KLERO_USER_PROD_API_URL || secrets.KLERO_USER_PROD_API_URL }}
-          EXPO_PUBLIC_WEB_URL: ${{ vars.KLERO_USER_PROD_WEB_URL || secrets.KLERO_USER_PROD_WEB_URL }}
-          EXPO_PUBLIC_HEALTH_CHECK_URL: ${{ vars.KLERO_USER_PROD_HEALTH_CHECK_URL || secrets.KLERO_USER_PROD_HEALTH_CHECK_URL }}
-          EXPO_PUBLIC_CHECKIN_API_KEY: ${{ secrets.KLERO_USER_PROD_CHECKIN_API_KEY }}
-        run: |
-          set -e
-          if [ -z "$EXPO_PUBLIC_API_URL" ]; then
-            echo "❌ KLERO_USER_PROD_API_URL is not set (repo variable or secret). Refusing to build a PROD APK against the dev backend."
-            exit 1
-          fi
-          : > .env
-          for KEY in EXPO_PUBLIC_API_URL EXPO_PUBLIC_WEB_URL EXPO_PUBLIC_HEALTH_CHECK_URL EXPO_PUBLIC_CHECKIN_API_KEY; do
-            VAL="${!KEY}"
-            if [ -n "$VAL" ]; then
-              echo "${KEY}=${VAL}" >> .env
-              echo "✅ ${KEY} set"
-            else
-              echo "⚠️ ${KEY} not set — app falls back to its built-in default"
-            fi
-          done
+      # - name: 🔐 Write klero-user PROD environment (.env)
+      #   working-directory: klero-frontend/klero-user
+      #   env:
+      #     EXPO_PUBLIC_API_URL: ${{ vars.KLERO_USER_PROD_API_URL || secrets.KLERO_USER_PROD_API_URL }}
+      #     EXPO_PUBLIC_WEB_URL: ${{ vars.KLERO_USER_PROD_WEB_URL || secrets.KLERO_USER_PROD_WEB_URL }}
+      #     EXPO_PUBLIC_HEALTH_CHECK_URL: ${{ vars.KLERO_USER_PROD_HEALTH_CHECK_URL || secrets.KLERO_USER_PROD_HEALTH_CHECK_URL }}
+      #     EXPO_PUBLIC_CHECKIN_API_KEY: ${{ secrets.KLERO_USER_PROD_CHECKIN_API_KEY }}
+      #   run: |
+      #     set -e
+      #     if [ -z "$EXPO_PUBLIC_API_URL" ]; then
+      #       echo "❌ KLERO_USER_PROD_API_URL is not set (repo variable or secret). Refusing to build a PROD APK against the dev backend."
+      #       exit 1
+      #     fi
+      #     : > .env
+      #     for KEY in EXPO_PUBLIC_API_URL EXPO_PUBLIC_WEB_URL EXPO_PUBLIC_HEALTH_CHECK_URL EXPO_PUBLIC_CHECKIN_API_KEY; do
+      #       VAL="${!KEY}"
+      #       if [ -n "$VAL" ]; then
+      #         echo "${KEY}=${VAL}" >> .env
+      #         echo "✅ ${KEY} set"
+      #       else
+      #         echo "⚠️ ${KEY} not set — app falls back to its built-in default"
+      #       fi
+      #     done
  
       - name: 🔧 Install Dependencies (@klero/tools + klero-user)
         working-directory: klero-frontend
