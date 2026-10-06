@@ -13,7 +13,7 @@ on:
         default: ""
 
 env:
-  COMMIT_ID: 66ed6d32d747d84a58af2c9e9eff316ebd5e2dab
+  COMMIT_ID: 4f5674bfc9907ec358914a4839a6caa770c52138
   REPO: klero-organization/klero-backend
   SSH_PORT: 22
   DOCKER_IMAGE_REPO: exchekhub/klero
