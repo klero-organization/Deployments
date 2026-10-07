@@ -1,5 +1,5 @@
 name: "📱 Klero User APK - Build & Deploy to PROD"
- 
+
 on:
   push:
     branches: [klero]
@@ -19,11 +19,11 @@ on:
         options:
           - release
           - debug
- 
+
 env:
   # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch).
   # Leave empty to build the latest commit of the repo's default branch.
-  COMMIT_ID: aafe7f9e09ea66570317b4a8a9430c3711e60dd2
+  COMMIT_ID: 09accbe10cfc2b34ceab7fd4739a95a8c25717c9
   # Source repository
   REPO_FRONTEND: klero-organization/klero-frontend
   PROD_APK_DIR: "/home/ubuntu/klero-apks"
@@ -31,7 +31,7 @@ env:
   # Android application ID, applied only if app.json doesn't already set one.
   # ⚠️ This is permanent once published to the Play Store — confirm before first release.
   ANDROID_PACKAGE: "com.klero.user"
- 
+
 jobs:
   build_apk:
     name: "🔨 Build Klero User APK"
@@ -47,6 +47,7 @@ jobs:
           EFFECTIVE="${INPUT_CID:-$ENV_CID}"
           echo "EFFECTIVE_COMMIT_ID=${EFFECTIVE}" >> $GITHUB_OUTPUT
           echo "🎯 Target Commit ID: ${EFFECTIVE:-latest HEAD}"
+
       - name: 📥 Checkout klero-frontend
         uses: actions/checkout@v4
         with:
@@ -54,7 +55,7 @@ jobs:
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
- 
+
       - name: Reset to COMMIT_ID
         working-directory: klero-frontend
         env:
@@ -69,6 +70,7 @@ jobs:
             )
           fi
           echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
       - name: 🏷️ Set image tag (First 4 digits of commit)
         id: tag
         working-directory: klero-frontend
@@ -76,20 +78,21 @@ jobs:
           SHA4=$(git rev-parse HEAD | cut -c1-4)
           echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
           echo "🏷️ Image Tag SHA4: ${SHA4}"
+
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
- 
+
       - name: 📦 Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
- 
+
       - name: 🤖 Accept Android SDK Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
- 
+
       # klero-user reads these at bundle time (Expo inlines EXPO_PUBLIC_* into
       # the JS). Without them the code silently falls back to the DEV backend,
       # so a PROD build fails fast if the API URL isn't configured.
@@ -117,25 +120,39 @@ jobs:
       #         echo "⚠️ ${KEY} not set — app falls back to its built-in default"
       #       fi
       #     done
- 
+
       - name: 🔧 Install Dependencies (@klero/tools + klero-user)
         working-directory: klero-frontend
         run: |
           set -e
+
           # klero-user is an npm workspace member, but the repo has no root
           # lockfile (only klero-user/package-lock.json). Move the workspace
           # root aside so each package installs standalone and klero-user's
           # own lockfile is honoured (CI-only; nothing is committed).
           mv package.json package.json.ci-bak
- 
+
+          # ─────────────────────────────────────────────────────────────────
           # 1. Build the shared @klero/tools package (not published to npm).
+          #
+          #    CRITICAL: klero-user imports from @klero/tools' compiled dist/
+          #    folder (dist/index.cjs / dist/index.js), NOT the TypeScript src.
+          #    If dist/ is missing or stale the Metro bundler will fail with a
+          #    module-not-found error at bundle time, even though npm install
+          #    succeeds (it only links the folder, not the build output).
+          #
+          #    Rule: any change to packages/tools/src MUST be followed by
+          #    `npm run build` here BEFORE the klero-user install step below.
+          # ─────────────────────────────────────────────────────────────────
           cd packages/tools
           npm install --no-audit --no-fund
           npm run build
-          test -f dist/index.cjs
-          echo "✅ @klero/tools built"
+          # Hard-fail if the expected output is absent — catches build script
+          # mis-configurations early rather than producing a silent DEV-only APK.
+          test -f dist/index.cjs || (echo "❌ @klero/tools build failed: dist/index.cjs not found" && exit 1)
+          echo "✅ @klero/tools built successfully"
           cd ../../klero-user
- 
+
           # 2. Configure app.json (Android package & versionCode) and point
           #    @klero/tools at the local package instead of the npm registry.
           node -e '
@@ -147,24 +164,26 @@ jobs:
             if (!app.expo.android.versionCode) app.expo.android.versionCode = 1;
             fs.writeFileSync("./app.json", JSON.stringify(app, null, 2));
             console.log("✅ android.package:", app.expo.android.package);
- 
+
             const pkg = JSON.parse(fs.readFileSync("./package.json", "utf8"));
             pkg.dependencies["@klero/tools"] = "file:../packages/tools";
             fs.writeFileSync("./package.json", JSON.stringify(pkg, null, 2));
             console.log("✅ @klero/tools ->", pkg.dependencies["@klero/tools"]);
           '
- 
+
           # 3. Install from the committed lockfile. `npm install` (not delete +
           #    reinstall) keeps every locked version and only adds the local
           #    @klero/tools link, so builds don't drift between runs.
           npm install --legacy-peer-deps --no-audit --no-fund
           echo "✅ klero-user dependencies installed (locked versions)"
+
       - name: 🛠️ Prebuild Native Android Project
         working-directory: klero-frontend/klero-user
         env:
           NODE_PATH: ${{ github.workspace }}/klero-frontend/klero-user/node_modules:${{ github.workspace }}/klero-frontend/node_modules
         run: |
           npx expo prebuild --platform android --clean --no-install
+
           # Guarantee splashscreen_logo drawable exists
           DRAWABLE_DIR="android/app/src/main/res/drawable"
           mkdir -p "$DRAWABLE_DIR"
@@ -174,6 +193,7 @@ jobs:
           else
             echo "✅ splashscreen_logo drawable already exists"
           fi
+
       - name: 🚀 Compile APK with Gradle
         id: bundle
         working-directory: klero-frontend/klero-user/android
@@ -183,6 +203,7 @@ jobs:
           NODE_PATH: ${{ github.workspace }}/klero-frontend/klero-user/node_modules:${{ github.workspace }}/klero-frontend/node_modules
         run: |
           chmod +x gradlew
+
           # Ensure gradle.properties ends with a newline before appending custom properties
           # to prevent corrupting expo-modules autolinking JSON array properties
           printf "\norg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m\n" >> gradle.properties
@@ -190,6 +211,7 @@ jobs:
           printf "reactNativeArchitectures=arm64-v8a,armeabi-v7a\n" >> gradle.properties
           echo "📄 Tail of gradle.properties:"
           tail -n 10 gradle.properties
+
           GRADLE_FLAGS="-PreactNativeArchitectures=arm64-v8a,armeabi-v7a --parallel --no-daemon --stacktrace --info"
           if [ "$BUILD_TYPE" = "release" ]; then
             ./gradlew assembleRelease $GRADLE_FLAGS
@@ -198,22 +220,25 @@ jobs:
             ./gradlew assembleDebug $GRADLE_FLAGS
             RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           fi
+
           if [ -z "$RAW_APK" ] || [ ! -f "$RAW_APK" ]; then
             echo "❌ APK build output not found!"
             exit 1
           fi
+
           FINAL_APK_NAME="klero-user-${SHA4}-${BUILD_TYPE}.apk"
           cp "$RAW_APK" "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
           echo "APK_NAME=${FINAL_APK_NAME}" >> $GITHUB_OUTPUT
           echo "✅ Built APK: ${FINAL_APK_NAME}"
           ls -lh "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
+
       - name: 📤 Upload APK Artifact to GitHub Actions
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.bundle.outputs.APK_NAME }}
           path: ${{ github.workspace }}/${{ steps.bundle.outputs.APK_NAME }}
           retention-days: 30
- 
+
   deploy_to_prod:
     name: "🚀 Deploy APK to Production Server"
     runs-on: ubuntu-latest
@@ -224,7 +249,7 @@ jobs:
         with:
           name: ${{ needs.build_apk.outputs.apk_name }}
           path: ./artifacts
- 
+
       - name: 🔑 Set up SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
@@ -245,6 +270,7 @@ jobs:
             ServerAliveInterval 30
             ServerAliveCountMax 20
           EOF
+
       - name: 📦 Transfer APK & Update Symlink on PROD
         env:
           APK_NAME: ${{ needs.build_apk.outputs.apk_name }}
@@ -252,8 +278,10 @@ jobs:
         run: |
           echo "📁 Ensuring directory exists on PROD server: ${PROD_DIR}"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target "mkdir -p ${PROD_DIR}"
+
           echo "🚀 Transferring ${APK_NAME} to target:${PROD_DIR}/"
           scp ./artifacts/${APK_NAME} target:${PROD_DIR}/${APK_NAME}
+
           echo "🔗 Updating symlink to latest APK..."
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s << EOSSH
             cd "${PROD_DIR}"
@@ -262,4 +290,3 @@ jobs:
             echo "✅ Current APKs in ${PROD_DIR}:"
             ls -lh "${PROD_DIR}"
           EOSSH
- 
