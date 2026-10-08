@@ -23,7 +23,7 @@ on:
 env:
   # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch).
   # Leave empty to build the latest commit of the repo's default branch.
-  COMMIT_ID: 12210fed42278dcc570ac34b58ea1dcf20baa740
+  COMMIT_ID: 346baf0b7cb2f5c1d7722fca754baf6fda2937d0
   # Source repository
   REPO_FRONTEND: klero-organization/klero-frontend
   PROD_APK_DIR: "/home/ubuntu/klero-apks"
