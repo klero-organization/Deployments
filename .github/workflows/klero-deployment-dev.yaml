@@ -631,72 +631,67 @@ jobs:
             --push -f Dockerfile.aiassistant .
           echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
-  # ==============================================================================
-  # DISABLED: klero-s3-service is not currently deployed on this environment.
-  # Re-enable by uncommenting this job and adding it back to the needs: arrays
-  # of stop_all_klero and deploy_all_services (and the deploy step further down).
-  # ==============================================================================
-  # build_s3:
-  #   name: "Build - klero-s3-service"
-  #   runs-on: ubuntu-latest
-  #   needs: setup
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         repository: ${{ env.REPO }}
-  #         token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
-  #         fetch-depth: 0
-  #         path: klero-backend
-  #
-  #     - name: Reset to commit
-  #       working-directory: klero-backend
-  #       env:
-  #         TARGET_CID: ${{ needs.setup.outputs.commit_id }}
-  #       run: |
-  #         git fetch --all
-  #         if [ -n "$TARGET_CID" ]; then
-  #           BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
-  #             | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-  #           [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
-  #           git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
-  #         fi
-  #
-  #     - uses: actions/setup-java@v4
-  #       with:
-  #         distribution: temurin
-  #         java-version: 17
-  #         cache: maven
-  #
-  #     - uses: docker/setup-buildx-action@v3
-  #
-  #     - uses: docker/login-action@v3
-  #       with:
-  #         username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
-  #         password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
-  #
-  #     - name: Build and Push klero-s3-service
-  #       working-directory: klero-backend/klero-server
-  #       env:
-  #         SVC: klero-s3-service
-  #         SHA4: ${{ needs.setup.outputs.sha4 }}
-  #       run: |
-  #         if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
-  #
-  #         mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
-  #
-  #         cat > Dockerfile.s3 << 'DOCKERFILE'
-  #         FROM eclipse-temurin:17-jre
-  #         WORKDIR /app
-  #         COPY klero-s3-service/target/*.jar app.jar
-  #         EXPOSE 8085
-  #         ENTRYPOINT ["java", "-Dspring.profiles.active=dev", "-jar", "app.jar"]
-  #         DOCKERFILE
-  #
-  #         docker buildx build --platform linux/amd64 \
-  #           -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
-  #           -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
-  #           --push -f Dockerfile.s3 .
-  #         echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+  build_s3:
+    name: "Build - klero-s3-service"
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-backend
+
+      - name: Reset to commit
+        working-directory: klero-backend
+        env:
+          TARGET_CID: ${{ needs.setup.outputs.commit_id }}
+        run: |
+          git fetch --all
+          if [ -n "$TARGET_CID" ]; then
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 \
+              | sed 's/origin\///' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -z "$BRANCH" ] && echo '[ERROR] Commit not found' && exit 1
+            git checkout "$BRANCH" && git reset --hard "$TARGET_CID"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
+
+      - name: Build and Push klero-s3-service
+        working-directory: klero-backend/klero-server
+        env:
+          SVC: klero-s3-service
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          if [ ! -d "$SVC" ]; then echo "[ERROR] Module $SVC not found in klero-server"; exit 1; fi
+
+          mvn -f pom.xml -U -B -DskipTests=true -Dspotless.check.skip=true -P${{ env.SPRING_PROFILE }} -pl ${SVC} -am clean package
+
+          cat > Dockerfile.s3 << 'DOCKERFILE'
+          FROM eclipse-temurin:17-jre
+          WORKDIR /app
+          COPY klero-s3-service/target/*.jar app.jar
+          EXPOSE 8085
+          ENTRYPOINT ["java", "-Dspring.profiles.active=dev", "-jar", "app.jar"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC} \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4} \
+            --push -f Dockerfile.s3 .
+          echo "[SUCCESS] Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
 
   build_financial_engine:
     name: "Build - klero-financial-engine-service"
@@ -841,7 +836,7 @@ jobs:
       - build_calcy
       - build_ai_assistant
       - build_financial_engine
-      # - build_s3                  # disabled: klero-s3-service not deployed here
+      - build_s3
       # - build_pg                  # disabled: klero-pg-service not deployed here
     steps:
       - name: Set up SSH
@@ -1121,31 +1116,28 @@ jobs:
               "$FULL_IMAGE"
           EOSSH
 
-      # ==========================================================================
-      # DISABLED: klero-s3-service is not currently deployed on this environment.
-      # ==========================================================================
-      # - name: Deploy klero-s3-service (8085)
-      #   env:
-      #     SHA4: ${{ needs.setup.outputs.sha4 }}
-      #   run: |
-      #     ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
-      #       set -e
-      #       SHA4="$1"
-      #       SVC="klero-s3-service"
-      #       PORT=8085
-      #       FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
-      #       docker stop "$SVC" 2>/dev/null || true
-      #       docker rm --force "$SVC" 2>/dev/null || true
-      #       sleep 3
-      #       docker pull "$FULL_IMAGE"
-      #       docker run -d --name "$SVC" --network host --restart unless-stopped \
-      #         -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
-      #         -e SERVER_PORT=$PORT \
-      #         -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
-      #         -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
-      #         -e APP_OPENAPI_GATEWAY_PORT=-1 \
-      #         "$FULL_IMAGE"
-      #     EOSSH
+      - name: Deploy klero-s3-service (8085)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-s3-service"
+            PORT=8085
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
 
       - name: Deploy klero-financial-engine-service (8087)
         env:
@@ -1221,7 +1213,7 @@ jobs:
           echo "- **Docker Repository:** \`${{ env.DOCKER_IMAGE_REPO }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Deployment Status:** \`${STATUS}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Microservices Deployed (10 Services)" >> $GITHUB_STEP_SUMMARY
+          echo "### Microservices Deployed (11 Services)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Service | Port | Image |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
@@ -1232,8 +1224,9 @@ jobs:
           echo "| klero-customer-service | 8082 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-customer-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "| klero-advisor-service | 8083 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-advisor-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "| klero-notify-service | 8084 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-notify-service\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| klero-s3-service | 8085 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-s3-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "| klero-calcy-service | 8089 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-calcy-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "| klero-ai-assistant-service | 8088 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-ai-assistant-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "| klero-financial-engine-service | 8087 | \`${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-klero-financial-engine-service\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_klero-s3-service and klero-pg-service are currently disabled in this workflow._" >> $GITHUB_STEP_SUMMARY
+          echo "_klero-pg-service is currently disabled in this workflow._" >> $GITHUB_STEP_SUMMARY
