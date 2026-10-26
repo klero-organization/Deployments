@@ -166,44 +166,26 @@ jobs:
           echo "✅ Built APK: ${FINAL_APK_NAME}"
           ls -lh "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
 
-      - name: 🔑 Set up SSH to PROD Server
+      - name: Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
-          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_PROD || secrets.SSH_PRIVATE_KEY_KLERO_PROD || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
+          SSH_HOST: ${{ secrets.SSH_HOST_PROD || secrets.SSH_HOST_KLERO_PROD || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_PROD || secrets.SSH_USERNAME_KLERO_PROD || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || secrets.SSH_USERNAME_EXCHEK_PREPROD }}
         run: |
-          set -e
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
-          # Trim any accidental leading/trailing whitespace from secrets
-          CLEAN_HOST=$(echo -n "$SSH_HOST" | xargs)
-          CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
-
-          # Write private key with clean UNIX newlines and trailing newline
-          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
-          echo "" >> ~/.ssh/id_rsa
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-
-          # Attempt keyscan without failing if port is restricted/slow
-          touch ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-          ssh-keyscan -T 10 -p ${{ env.SSH_PORT }} -H "$CLEAN_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
           cat > ~/.ssh/config << EOF
           Host target
-            HostName $CLEAN_HOST
-            User $CLEAN_USER
+            HostName $SSH_HOST
+            User $SSH_USERNAME
             Port ${{ env.SSH_PORT }}
             IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking accept-new
+            StrictHostKeyChecking yes
             ServerAliveInterval 30
             ServerAliveCountMax 20
           EOF
-          chmod 600 ~/.ssh/config
-
-          echo "🔍 Testing SSH connection..."
-          ssh -o ConnectTimeout=15 target "echo '✅ SSH connected successfully as \$(whoami) on \$(hostname)'"
 
       - name: 📦 Transfer APK & Update Symlink on PROD
         env:
