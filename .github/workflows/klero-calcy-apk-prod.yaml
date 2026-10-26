@@ -2,7 +2,7 @@ name: "📱 Klero Calcy APK - Build & Deploy to PROD"
 
 on:
   push:
-    branches: [klero]
+    branches: [klero, klero-prod]
     paths:
       - '.github/workflows/klero-calcy-apk-prod.yaml'
   workflow_dispatch:
@@ -22,18 +22,16 @@ on:
 
 env:
   # Target commit ID from klero-frontend (paste commit SHA here or pass via workflow_dispatch)
-  COMMIT_ID: fe83865582c6af46c5e05648654fb15fc921ce89
+  COMMIT_ID: 6bad44783686f853693fa931facd7ae677d2a40d
   # Source repository
   REPO_FRONTEND: klero-organization/klero-frontend
   PROD_APK_DIR: "/home/ubuntu/klero-apks"
   SSH_PORT: 22
 
 jobs:
-  build_apk:
-    name: "🔨 Build Calcy APK"
+  build_and_deploy:
+    name: "🔨 Build & Deploy Calcy APK"
     runs-on: ubuntu-latest
-    outputs:
-      apk_name: ${{ steps.bundle.outputs.APK_NAME }}
     steps:
       - name: Resolve Effective Commit ID
         id: resolve_commit
@@ -168,29 +166,11 @@ jobs:
           echo "✅ Built APK: ${FINAL_APK_NAME}"
           ls -lh "$GITHUB_WORKSPACE/$FINAL_APK_NAME"
 
-      - name: 📤 Upload APK Artifact to GitHub Actions
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.bundle.outputs.APK_NAME }}
-          path: ${{ github.workspace }}/${{ steps.bundle.outputs.APK_NAME }}
-          retention-days: 30
-
-  deploy_to_prod:
-    name: "🚀 Deploy APK to Production Server"
-    runs-on: ubuntu-latest
-    needs: build_apk
-    steps:
-      - name: 📥 Download Built APK Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build_apk.outputs.apk_name }}
-          path: ./artifacts
-
-      - name: 🔑 Set up SSH
+      - name: 🔑 Set up SSH to PROD Server
         env:
           SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.KLERO_SSH_HOST}}
-          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME}}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
@@ -209,14 +189,14 @@ jobs:
 
       - name: 📦 Transfer APK & Update Symlink on PROD
         env:
-          APK_NAME: ${{ needs.build_apk.outputs.apk_name }}
+          APK_NAME: ${{ steps.bundle.outputs.APK_NAME }}
           PROD_DIR: ${{ env.PROD_APK_DIR }}
         run: |
           echo "📁 Ensuring directory exists on PROD server: ${PROD_DIR}"
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target "mkdir -p ${PROD_DIR}"
 
-          echo "🚀 Transferring ${APK_NAME} to target:${PROD_DIR}/"
-          scp ./artifacts/${APK_NAME} target:${PROD_DIR}/${APK_NAME}
+          echo "🚀 Transferring ${APK_NAME} directly to target:${PROD_DIR}/"
+          scp "$GITHUB_WORKSPACE/${APK_NAME}" target:${PROD_DIR}/${APK_NAME}
 
           echo "🔗 Updating symlink to latest APK..."
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s << EOSSH
@@ -226,3 +206,11 @@ jobs:
             echo "✅ Current APKs in ${PROD_DIR}:"
             ls -lh "${PROD_DIR}"
           EOSSH
+
+      - name: 📤 Upload APK Artifact to GitHub Actions (Optional - Non-blocking)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ steps.bundle.outputs.APK_NAME }}
+          path: ${{ github.workspace }}/${{ steps.bundle.outputs.APK_NAME }}
+          retention-days: 7
