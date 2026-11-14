@@ -4,7 +4,7 @@ on:
   push:
     branches: [klero-qa]
     paths:
-      - '.github/workflows/klero-calcy-web-q.yaml'
+      - '.github/workflows/klero-calcy-web-qa.yaml'
   workflow_dispatch:
     inputs:
       commit_id:
