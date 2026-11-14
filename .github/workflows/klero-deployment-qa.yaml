@@ -4,7 +4,7 @@ on:
   push:
     branches: [klero-qa]
     paths:
-      - '.github/workflows/klero-deployment-q.yaml'
+      - '.github/workflows/klero-deployment-qa.yaml'
   workflow_dispatch:
     inputs:
       commit_id:
