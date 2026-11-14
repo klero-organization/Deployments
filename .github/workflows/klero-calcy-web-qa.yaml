@@ -105,6 +105,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
 
+      - name: 📝 Configure Environment (.env) from Secret
+        working-directory: klero-frontend/klero-calcy
+        env:
+          CALCY_ENV: ${{ secrets['klero-calcy-web-qa'] || secrets.KLERO_CALCY_WEB_QA || secrets.KLERO_CALCY_WEB_QA_ENV || secrets.KLERO_CALCY_QA }}
+        run: |
+          if [ -z "$CALCY_ENV" ]; then
+            echo "❌ ERROR: Secret 'klero-calcy-web-qa' (or 'KLERO_CALCY_WEB_QA') is empty or not found in GitHub Secrets!"
+            exit 1
+          fi
+          echo "✅ Injecting secret into .env file..."
+          echo "$CALCY_ENV" | tr -d '\r' > .env
+          echo "📄 .env file successfully created from secret (lines: $(wc -l < .env))"
+
       - name: 🔨 Build & Push klero-calcy-web (Expo Web via nginx)
         working-directory: klero-frontend/klero-calcy
         env:
@@ -114,6 +127,7 @@ jobs:
           FROM node:20-alpine AS builder
           WORKDIR /app
           COPY . .
+
           RUN rm -f package-lock.json && \
               npm install --legacy-peer-deps --no-audit --no-fund
           RUN npm install tailwindcss@3.4.17 --save-exact --no-audit --no-fund
@@ -139,30 +153,61 @@ jobs:
     steps:
       - name: 🔐 Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_QA }}
-          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_QA || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA || secrets.KLERO_SSH_USERNAME || secrets.SSH_USERNAME_ZOY_QA || 'ubuntu' }}
         run: |
+          set -e
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 700 ~/.ssh
+
+          CLEAN_HOST=$(echo -n "$SSH_HOST" | xargs)
+          CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
+
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ ERROR: SSH_PRIVATE_KEY is empty. Check GitHub secrets (SSH_PRIVATE_KEY_KLERO_QA)!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_HOST" ]; then
+            echo "❌ ERROR: SSH_HOST is empty. Check GitHub secrets (SSH_HOST_KLERO_QA)!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_USER" ]; then
+            echo "❌ ERROR: SSH_USERNAME is empty. Check GitHub secrets (SSH_USERNAME_KLERO_QA)!"
+            exit 1
+          fi
+
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "" >> ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+          touch ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -p ${{ env.SSH_PORT }} -H "$CLEAN_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
           cat > ~/.ssh/config << EOF
           Host target
-            HostName $SSH_HOST
-            User $SSH_USERNAME
+            HostName $CLEAN_HOST
+            User $CLEAN_USER
             Port ${{ env.SSH_PORT }}
             IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking yes
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
             ServerAliveInterval 30
             ServerAliveCountMax 20
           EOF
+          chmod 600 ~/.ssh/config
+
+          echo "🔍 Testing SSH connection..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 target "echo '✅ SSH connected successfully as \$(whoami) on \$(hostname)'"
 
       - name: 🚀 Deploy klero-calcy-web (Port ${{ env.PORT }})
         env:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e
             SHA4="$1"
             SVC="klero-calcy-web"
@@ -173,6 +218,7 @@ jobs:
             docker stop "$SVC" 2>/dev/null || true
             docker rm --force "$SVC" 2>/dev/null || true
             sleep 2
+            echo "[INFO] Pulling fresh image $FULL_IMAGE..."
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --restart unless-stopped \
               -p ${PORT}:80 "$FULL_IMAGE"
