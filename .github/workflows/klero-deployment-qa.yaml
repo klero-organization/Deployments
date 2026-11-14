@@ -586,29 +586,44 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA }}
         run: |
+          set -e
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 700 ~/.ssh
+
+          CLEAN_HOST=$(echo -n "$SSH_HOST" | xargs)
+          CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
+
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "" >> ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+          touch ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -p ${{ env.SSH_PORT }} -H "$CLEAN_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
           cat > ~/.ssh/config << EOF
           Host target
-            HostName $SSH_HOST
-            User $SSH_USERNAME
+            HostName $CLEAN_HOST
+            User $CLEAN_USER
             Port ${{ env.SSH_PORT }}
             IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking yes
+            StrictHostKeyChecking accept-new
             ServerAliveInterval 30
             ServerAliveCountMax 20
           EOF
+          chmod 600 ~/.ssh/config
+
+          echo "🔍 Testing SSH connection..."
+          ssh -o ConnectTimeout=15 target "echo '✅ SSH connected successfully as \$(whoami) on \$(hostname)'"
 
       - name: 🛑 Stop all existing klero containers
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
-            echo "🛑 Stopping all klero-* containers..."
-            docker ps -aq --filter "name=klero-" | xargs -r docker rm --force
-            echo "⏳ Waiting 10s for ports to release..."
-            sleep 10
-            echo "✅ Done"
+            echo "🛑 Stopping all klero-* containers (if any)..."
+            docker ps -aq --filter "name=klero-" | xargs -r docker rm --force 2>/dev/null || true
+            echo "⏳ Waiting 5s for ports to release..."
+            sleep 5
+            echo "✅ Ready for fresh deployment"
           EOSSH
 
       - name: 🚀 Deploy klero-eukea-service (Eureka :8761)
@@ -618,6 +633,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-eukea-service"; PORT=8761
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT "$FULL_IMAGE"
@@ -631,6 +647,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-gateway-service"; PORT=8080
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -646,6 +663,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-auth-service"; PORT=8086
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -661,6 +679,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-admin-service"; PORT=8081
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -676,6 +695,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-customer-service"; PORT=8082
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -691,6 +711,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-advisor-service"; PORT=8083
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -706,6 +727,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-notify-service"; PORT=8084
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -721,6 +743,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-s3-service"; PORT=8085
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -736,6 +759,7 @@ jobs:
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
             set -e; SHA4="$1"; SVC="klero-calcy-service"; PORT=8089
             FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa"
+            docker rm --force "$SVC" 2>/dev/null || true
             docker pull "$FULL_IMAGE"
             docker run -d --name "$SVC" --network host --restart unless-stopped \
               -e SPRING_PROFILES_ACTIVE=qa -e SERVER_PORT=$PORT \
@@ -756,18 +780,32 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA }}
         run: |
+          set -e
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 700 ~/.ssh
+
+          CLEAN_HOST=$(echo -n "$SSH_HOST" | xargs)
+          CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
+
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "" >> ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+          touch ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -T 10 -p ${{ env.SSH_PORT }} -H "$CLEAN_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
           cat > ~/.ssh/config << EOF
           Host target
-            HostName $SSH_HOST
-            User $SSH_USERNAME
+            HostName $CLEAN_HOST
+            User $CLEAN_USER
             Port ${{ env.SSH_PORT }}
             IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
           EOF
+          chmod 600 ~/.ssh/config
       - name: Print container status
         run: |
           ssh -o ServerAliveInterval=30 target bash << 'EOSSH'
