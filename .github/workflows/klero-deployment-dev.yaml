@@ -837,7 +837,7 @@ jobs:
       - build_ai_assistant
       - build_financial_engine
       - build_s3
-      # - build_pg                  # disabled: klero-pg-service not deployed here
+      - build_pg                  # disabled: klero-pg-service not deployed here
     steps:
       - name: Set up SSH
         env:
@@ -1165,28 +1165,28 @@ jobs:
       # ==========================================================================
       # DISABLED: klero-pg-service is not currently deployed on this environment.
       # ==========================================================================
-      # - name: Deploy klero-pg-service (8089)
-      #   env:
-      #     SHA4: ${{ needs.setup.outputs.sha4 }}
-      #   run: |
-      #     ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
-      #       set -e
-      #       SHA4="$1"
-      #       SVC="klero-pg-service"
-      #       PORT=8089
-      #       FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
-      #       docker stop "$SVC" 2>/dev/null || true
-      #       docker rm --force "$SVC" 2>/dev/null || true
-      #       sleep 3
-      #       docker pull "$FULL_IMAGE"
-      #       docker run -d --name "$SVC" --network host --restart unless-stopped \
-      #         -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
-      #         -e SERVER_PORT=$PORT \
-      #         -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
-      #         -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
-      #         -e APP_OPENAPI_GATEWAY_PORT=-1 \
-      #         "$FULL_IMAGE"
-      #     EOSSH
+      - name: Deploy klero-pg-service (8089)
+        env:
+          SHA4: ${{ needs.setup.outputs.sha4 }}
+        run: |
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash -s "$SHA4" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            SVC="klero-pg-service"
+            PORT=8089
+            FULL_IMAGE="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}"
+            docker stop "$SVC" 2>/dev/null || true
+            docker rm --force "$SVC" 2>/dev/null || true
+            sleep 3
+            docker pull "$FULL_IMAGE"
+            docker run -d --name "$SVC" --network host --restart unless-stopped \
+              -e SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILE }} \
+              -e SERVER_PORT=$PORT \
+              -e EUREKA_CLIENT_SERVICEURL_DEFAULTZONE="http://localhost:8761/eureka/" \
+              -e EUREKA_INSTANCE_PREFER_IP_ADDRESS=true \
+              -e APP_OPENAPI_GATEWAY_PORT=-1 \
+              "$FULL_IMAGE"
+          EOSSH
 
       - name: Verify Running Backend Containers
         run: |
