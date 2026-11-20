@@ -218,9 +218,9 @@ jobs:
     steps:
       - name: Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_DEV || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
-          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_DEV || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_DEV || secrets.KLERO_SSH_USERNAME || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || 'ubuntu' }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ZOY_QA }}
+          SSH_HOST: ${{ secrets.SSH_HOST_ZOY_QA }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_ZOY_QA }}
         run: |
           set -e
           mkdir -p ~/.ssh
@@ -230,7 +230,15 @@ jobs:
           CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
 
           if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "❌ ERROR: SSH_PRIVATE_KEY is empty."
+            echo "❌ ERROR: SSH_PRIVATE_KEY_ZOY_QA is empty in GitHub secrets!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_HOST" ]; then
+            echo "❌ ERROR: SSH_HOST_ZOY_QA is empty in GitHub secrets!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_USER" ]; then
+            echo "❌ ERROR: SSH_USERNAME_ZOY_QA is empty in GitHub secrets!"
             exit 1
           fi
 
