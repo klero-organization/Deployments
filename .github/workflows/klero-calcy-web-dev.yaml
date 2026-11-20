@@ -14,7 +14,7 @@ on:
 
 env:
   # Target commit ID from klero-frontend (leave blank for latest HEAD)
-  COMMIT_ID: 593da8130c317911790450d3bce296eeedb8cc23 
+  COMMIT_ID: e3ebef5dcca4b2b403d57a4852524d05574f225a 
   REPO_FRONTEND: klero-organization/klero-frontend
   DOCKER_IMAGE_REPO: exchekhub/klero
   SSH_PORT: 22
@@ -107,7 +107,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
 
       - name: 🔨 Build & Push klero-calcy-web (Expo Web via nginx)
-        working-directory: klero-frontend/klero-calcy
+        working-directory: klero-frontend/klero-web
         env:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
