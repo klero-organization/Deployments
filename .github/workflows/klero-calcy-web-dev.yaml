@@ -151,9 +151,9 @@ jobs:
     steps:
       - name: 🔐 Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_DEV || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY_EXCHEK_PREPROD }}
-          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_DEV || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST || secrets.SSH_HOST_EXCHEK_PREPROD }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_DEV || secrets.KLERO_SSH_USERNAME || secrets.SSH_USERNAME_ZOY_QA || secrets.SSH_USERNAME || 'ubuntu' }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_ZOY_QA }}
+          SSH_HOST: ${{  secrets.SSH_HOST_ZOY_QA }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_ZOY_QA || 'ubuntu' }}
         run: |
           set -e
           mkdir -p ~/.ssh
