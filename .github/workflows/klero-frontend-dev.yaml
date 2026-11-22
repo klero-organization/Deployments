@@ -350,11 +350,14 @@ jobs:
             set -e
             SHA4="$1"
 
+            echo "🧹 Stopping and removing previous frontend containers to free ports 3000, 3001, 3003..."
+            docker stop klero-frontend-web klero-frontend-user klero-frontend-admin 2>/dev/null || true
+            docker rm --force klero-frontend-web klero-frontend-user klero-frontend-admin 2>/dev/null || true
+            sleep 2
+
             echo "🚀 Deploying Website (dev.klero.in -> Port 3000)..."
             SVC_WEB="klero-frontend-web"
             IMG_WEB="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC_WEB}"
-            docker stop "$SVC_WEB" 2>/dev/null || true
-            docker rm --force "$SVC_WEB" 2>/dev/null || true
             docker pull "$IMG_WEB"
             docker run -d --name "$SVC_WEB" --restart unless-stopped \
               -e HOSTNAME="0.0.0.0" \
@@ -366,8 +369,6 @@ jobs:
             echo "🚀 Deploying Admin Frontend (dev.klero.in/admin -> Port 3001)..."
             SVC_ADMIN="klero-frontend-admin"
             IMG_ADMIN="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC_ADMIN}"
-            docker stop "$SVC_ADMIN" 2>/dev/null || true
-            docker rm --force "$SVC_ADMIN" 2>/dev/null || true
             docker pull "$IMG_ADMIN"
             docker run -d --name "$SVC_ADMIN" --restart unless-stopped \
               -e HOSTNAME="0.0.0.0" \
@@ -378,8 +379,6 @@ jobs:
             echo "🚀 Deploying User App (dev.klero.in/user -> Port 3003)..."
             SVC_USER="klero-frontend-user"
             IMG_USER="${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC_USER}"
-            docker stop "$SVC_USER" 2>/dev/null || true
-            docker rm --force "$SVC_USER" 2>/dev/null || true
             docker pull "$IMG_USER"
             docker run -d --name "$SVC_USER" --restart unless-stopped \
               -p 3003:80 \
@@ -387,5 +386,6 @@ jobs:
 
             echo ""
             echo "✅ Frontend Containers Status:"
+            sleep 3
             docker ps --filter "name=klero-frontend-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
           EOSSH
