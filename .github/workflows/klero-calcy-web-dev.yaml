@@ -14,7 +14,7 @@ on:
 
 env:
   # Target commit ID from klero-frontend (leave blank for latest HEAD)
-  COMMIT_ID: c42f656b44090503358731baaa1a892a08af1c5b
+  COMMIT_ID: a568250a1f341fbc6890dd727e877fef31f5ca20
   REPO_FRONTEND: klero-organization/klero-frontend
   DOCKER_IMAGE_REPO: exchekhub/klero
   SSH_PORT: 22
