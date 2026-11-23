@@ -156,6 +156,10 @@ jobs:
           echo "🔧 Patching dynamic require in app/home.tsx..."
           node -e 'const fs = require("fs"); const f = "app/home.tsx"; if(fs.existsSync(f)){ let c = fs.readFileSync(f, "utf8"); c = c.replace(/const TabsIndex = require\("\.\/\(tabs\)\/index"\)\.default;/, ""); if(!c.includes("import TabsIndex from")) { c = "import TabsIndex from \"./(tabs)/index\";\n" + c; } fs.writeFileSync(f, c); console.log("✅ Patched app/home.tsx with static TabsIndex import"); }'
 
+          echo "🔧 Patching default background in global.css and app/_layout.tsx to prevent navigation white screen glitch..."
+          node -e 'const fs=require("fs"); const f="global.css"; if(fs.existsSync(f)){ let c=fs.readFileSync(f,"utf8"); if(!c.includes("html, body, #root")) { c="html, body, #root { background-color: #F5F0FC; min-height: 100vh; }\n" + c; fs.writeFileSync(f, c); console.log("✅ Patched global.css default background"); } }'
+          node -e 'const fs=require("fs"); const f="app/_layout.tsx"; if(fs.existsSync(f)){ let c=fs.readFileSync(f,"utf8"); c=c.replace(/contentStyle:\s*\{\s*backgroundColor:\s*"transparent"\s*\}/g, "contentStyle: { backgroundColor: \"#F5F0FC\" }"); fs.writeFileSync(f, c); console.log("✅ Patched app/_layout.tsx contentStyle background"); }'
+
           echo "📝 Creating embedded Dockerfile for klero-calcy-web..."
           cat > Dockerfile.calcy-web << 'DOCKERFILE'
           FROM node:20-alpine AS builder
