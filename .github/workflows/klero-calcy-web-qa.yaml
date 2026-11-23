@@ -13,7 +13,7 @@ on:
         default: ""
 
 env:
-  COMMIT_ID: 5b3c8bbda3c49dfbc4913fe8ffc03ad55b5eb8f0 
+  COMMIT_ID: 7cb9295da8dacb61f7fcbeafe946b7302574c973
   REPO_FRONTEND: klero-organization/klero-frontend
   DOCKER_IMAGE_REPO: exchekhub/klero
   SSH_PORT: 22
@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO_FRONTEND }}
+          ref: dev_1.2
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
@@ -77,6 +78,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO_FRONTEND }}
+          ref: dev_1.2
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.KLERO_PAT || secrets.ZOY_PAT_FOR_FETCH_SC || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
@@ -123,6 +125,38 @@ jobs:
         env:
           SHA4: ${{ needs.setup.outputs.sha4 }}
         run: |
+          echo "🔧 Patching metro.config.js for Web tslib ES6 resolution..."
+          cat > metro.patch.js << 'PATCH_EOF'
+          const fs = require('fs');
+          const metroFile = 'metro.config.js';
+          let content = fs.readFileSync(metroFile, 'utf8');
+          if (!content.includes('tslib.es6.js')) {
+            const patchCode = `
+          // Map tslib to its es6 build to fix "__extends of undefined" crash on Web
+          const ALIASES = {
+            tslib: "tslib/tslib.es6.js",
+          };
+          const defaultResolveRequest = config.resolver.resolveRequest;
+          config.resolver.resolveRequest = (context, moduleName, platform) => {
+            const target = ALIASES[moduleName] ?? moduleName;
+            if (defaultResolveRequest) {
+              return defaultResolveRequest(context, target, platform);
+            }
+            return context.resolveRequest(context, target, platform);
+          };
+          `;
+            content = content.replace('module.exports = withNativeWind', patchCode + '\nmodule.exports = withNativeWind');
+            fs.writeFileSync(metroFile, content);
+            console.log('✅ metro.config.js successfully patched with tslib alias');
+          }
+          PATCH_EOF
+          node metro.patch.js
+          rm -f metro.patch.js
+
+          echo "🔧 Patching dynamic require in app/home.tsx..."
+          node -e 'const fs = require("fs"); const f = "app/home.tsx"; if(fs.existsSync(f)){ let c = fs.readFileSync(f, "utf8"); c = c.replace(/const TabsIndex = require\("\.\/\(tabs\)\/index"\)\.default;/, ""); if(!c.includes("import TabsIndex from")) { c = "import TabsIndex from \"./(tabs)/index\";\n" + c; } fs.writeFileSync(f, c); console.log("✅ Patched app/home.tsx with static TabsIndex import"); }'
+
+          echo "📝 Creating embedded Dockerfile for klero-calcy-web..."
           cat > Dockerfile.calcy-web << 'DOCKERFILE'
           FROM node:20-alpine AS builder
           WORKDIR /app
@@ -130,7 +164,13 @@ jobs:
 
           RUN rm -f package-lock.json && \
               npm install --legacy-peer-deps --no-audit --no-fund
-          RUN npm install tailwindcss@3.4.17 --save-exact --no-audit --no-fund
+
+          # Ensure tslib and Tailwind CSS v3 for NativeWind compatibility
+          RUN npm install tslib@^2.8.1 tailwindcss@3.4.17 --save-exact --legacy-peer-deps --no-audit --no-fund
+
+          # Ensure metro.config.js has tslib alias inside container
+          RUN node -e "const fs = require('fs'); let c = fs.readFileSync('metro.config.js', 'utf8'); if (!c.includes('tslib.es6.js')) { const p = '\nconst ALIASES = { tslib: \"tslib/tslib.es6.js\" };\nconst defResolve = config.resolver.resolveRequest;\nconfig.resolver.resolveRequest = (context, moduleName, platform) => {\n  const target = ALIASES[moduleName] ?? moduleName;\n  return defResolve ? defResolve(context, target, platform) : context.resolveRequest(context, target, platform);\n};\n'; fs.writeFileSync('metro.config.js', c.replace('module.exports = withNativeWind', p + '\nmodule.exports = withNativeWind')); }"
+
           RUN npx expo export --platform web
 
           FROM nginx:alpine
