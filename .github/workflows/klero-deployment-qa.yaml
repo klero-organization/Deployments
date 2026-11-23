@@ -582,9 +582,9 @@ jobs:
     steps:
       - name: 🔐 Set up SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_QA }}
-          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_KLERO_QA || secrets.SSH_PRIVATE_KEY_ZOY_QA || secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST_KLERO_QA || secrets.SSH_HOST_ZOY_QA || secrets.SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME_KLERO_QA || secrets.KLERO_SSH_USERNAME || secrets.SSH_USERNAME_ZOY_QA || 'ubuntu' }}
         run: |
           set -e
           mkdir -p ~/.ssh
@@ -592,6 +592,19 @@ jobs:
 
           CLEAN_HOST=$(echo -n "$SSH_HOST" | xargs)
           CLEAN_USER=$(echo -n "$SSH_USERNAME" | xargs)
+
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "❌ ERROR: SSH_PRIVATE_KEY is empty. Check GitHub secrets (SSH_PRIVATE_KEY_KLERO_QA)!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_HOST" ]; then
+            echo "❌ ERROR: SSH_HOST is empty. Check GitHub secrets (SSH_HOST_KLERO_QA)!"
+            exit 1
+          fi
+          if [ -z "$CLEAN_USER" ]; then
+            echo "❌ ERROR: SSH_USERNAME is empty. Check GitHub secrets (SSH_USERNAME_KLERO_QA)!"
+            exit 1
+          fi
 
           echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
           echo "" >> ~/.ssh/id_rsa
@@ -607,23 +620,29 @@ jobs:
             User $CLEAN_USER
             Port ${{ env.SSH_PORT }}
             IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking accept-new
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
             ServerAliveInterval 30
             ServerAliveCountMax 20
           EOF
           chmod 600 ~/.ssh/config
 
           echo "🔍 Testing SSH connection..."
-          ssh -o ConnectTimeout=15 target "echo '✅ SSH connected successfully as \$(whoami) on \$(hostname)'"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 target "echo '✅ SSH connected successfully as \$(whoami) on \$(hostname)'"
 
       - name: 🛑 Stop all existing klero containers
         run: |
-          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
-            echo "🛑 Stopping all klero-* containers (if any)..."
-            docker ps -aq --filter "name=klero-" | xargs -r docker rm --force 2>/dev/null || true
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=20 target bash << 'EOSSH'
+            echo "🛑 Stopping only backend microservice containers..."
+            for SVC in klero-eukea-service klero-gateway-service klero-auth-service klero-admin-service klero-customer-service klero-advisor-service klero-notify-service klero-s3-service klero-calcy-service klero-ai-assistant-service klero-financial-engine-service klero-pg-service; do
+              docker stop "$SVC" 2>/dev/null || true
+              docker rm --force "$SVC" 2>/dev/null || true
+            done
             echo "⏳ Waiting 5s for ports to release..."
             sleep 5
-            echo "✅ Ready for fresh deployment"
+            echo "✅ Ready for fresh backend deployment (frontend & calcy containers untouched)"
           EOSSH
 
       - name: 🚀 Deploy klero-eukea-service (Eureka :8761)
