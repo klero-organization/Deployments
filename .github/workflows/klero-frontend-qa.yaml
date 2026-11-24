@@ -13,7 +13,7 @@ on:
         default: ""
 
 env:
-  COMMIT_ID: a568250a1f341fbc6890dd727e877fef31f5ca20
+  COMMIT_ID: cc89e5418f15c3dff5343d52a78a4dc867407df5
   REPO_FRONTEND: klero-organization/klero-frontend
   DOCKER_IMAGE_REPO: exchekhub/klero
   SSH_PORT: 22
@@ -100,8 +100,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME || secrets.DOCKERHUB_EXCHEK_USERNAME_PREPROD }}
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.DOCKERHUB_EXCHEK_TOKEN_PREPROD }}
 
-      - name: Build & Push klero-frontend-admin (Next.js)
-        working-directory: klero-frontend/klero-admin
+      - name: Build & Push klero-frontend-admin (Next.js - klero_admin)
+        working-directory: klero-frontend/klero_admin
         env:
           SVC: klero-frontend-admin
           SHA4: ${{ needs.setup.outputs.sha4 }}
@@ -112,9 +112,9 @@ jobs:
           COPY package*.json ./
           RUN npm install --legacy-peer-deps
           COPY . .
-          ARG API_BASE_URL=https://qa-backend.klero.in
-          ENV NEXT_PUBLIC_API_BASE=$API_BASE_URL
+          ARG API_BASE_URL=https://qa-backend.klero.in/api
           ENV NEXT_PUBLIC_API_BASE_URL=$API_BASE_URL
+          ENV NEXT_PUBLIC_BASE_PATH=/admin
           RUN npm run build
 
           FROM node:20-alpine AS runner
@@ -128,7 +128,7 @@ jobs:
           DOCKERFILE
 
           docker buildx build --platform linux/amd64 \
-            --build-arg API_BASE_URL=https://qa-backend.klero.in \
+            --build-arg API_BASE_URL=https://qa-backend.klero.in/api \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${SVC}-qa \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SVC}-${SHA4}-qa \
             --push -f Dockerfile.admin .
@@ -249,8 +249,8 @@ jobs:
           FROM node:20-alpine AS builder
           WORKDIR /app
           COPY . .
-          RUN rm -rf klero-admin klero-web klero-calcy && \
-              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => !["klero-admin", "klero-web", "klero-calcy"].includes(w)); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
+          RUN rm -rf klero-admin klero_admin klero-web klero-calcy && \
+              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => !["klero-admin", "klero_admin", "klero-web", "klero-calcy"].includes(w)); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
           RUN node -e 'const fs=require("fs"); const f="packages/tools/tsup.config.ts"; if(fs.existsSync(f)){ fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dts: true", "dts: false")); }' && \
               node -e 'const fs=require("fs"); ["packages/tools/tsconfig.json", "klero-user/tsconfig.json"].forEach(f => { if(fs.existsSync(f)){ const c=JSON.parse(fs.readFileSync(f)); c.compilerOptions=c.compilerOptions||{}; c.compilerOptions.ignoreDeprecations="6.0"; fs.writeFileSync(f, JSON.stringify(c,null,2)); } });'
           RUN npm install --legacy-peer-deps --ignore-scripts
