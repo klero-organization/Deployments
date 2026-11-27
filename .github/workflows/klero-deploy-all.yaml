@@ -123,6 +123,27 @@ jobs:
     with:
       commit_id: ${{ needs.resolve.outputs.backend_cid }}
 
+  ai_assistant:
+    needs: eureka
+    uses: ./.github/workflows/klero-ai-assistant-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
+
+  calcy:
+    needs: eureka
+    uses: ./.github/workflows/klero-calcy-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
+
+  integration:
+    needs: eureka
+    uses: ./.github/workflows/klero-integration-service.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ needs.resolve.outputs.backend_cid }}
+
   frontend_user:
     needs: resolve
     uses: ./.github/workflows/klero-frontend-user.yaml
@@ -133,6 +154,20 @@ jobs:
   frontend_admin:
     needs: resolve
     uses: ./.github/workflows/klero-frontend-admin.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ needs.resolve.outputs.frontend_cid }}
+
+  frontend_web:
+    needs: resolve
+    uses: ./.github/workflows/klero-frontend-web.yaml
+    secrets: inherit
+    with:
+      commit_id: ${{ needs.resolve.outputs.frontend_cid }}
+
+  calcy_web:
+    needs: resolve
+    uses: ./.github/workflows/klero-calcy-web.yaml
     secrets: inherit
     with:
       commit_id: ${{ needs.resolve.outputs.frontend_cid }}

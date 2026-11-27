@@ -2,7 +2,7 @@ name: klero frontend admin deploy
 
 on:
   push:
-    branches: [klero]
+    branches: [klero-prod]
     paths:
       - '.github/workflows/klero-frontend-admin.yaml'
   workflow_dispatch:
@@ -37,6 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO }}
+          ref: dev_1.2
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
@@ -76,7 +77,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build & Push klero-frontend-admin (Next.js)
-        working-directory: klero-frontend/klero-admin
+        working-directory: klero-frontend/klero_admin
         env:
           SHA4: ${{ steps.tag.outputs.SHA4 }}
         run: |
@@ -87,9 +88,10 @@ jobs:
           COPY package*.json ./
           RUN npm install --legacy-peer-deps
           COPY . .
-          ARG API_BASE_URL=https://backend.klero.in
+          ARG API_BASE_URL=https://backend.klero.in/api
           ENV NEXT_PUBLIC_API_BASE=$API_BASE_URL
           ENV NEXT_PUBLIC_API_BASE_URL=$API_BASE_URL
+          ENV NEXT_PUBLIC_BASE_PATH=/admin
           RUN npm run build
 
           FROM node:20-alpine AS runner
@@ -103,7 +105,7 @@ jobs:
           DOCKERFILE
 
           docker buildx build --platform linux/amd64 \
-            --build-arg API_BASE_URL=https://backend.klero.in \
+            --build-arg API_BASE_URL=https://backend.klero.in/api \
             -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod \
             --push -f Dockerfile.admin .
           echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod"

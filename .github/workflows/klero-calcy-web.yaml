@@ -1,0 +1,180 @@
+name: klero calcy web deploy
+
+on:
+  push:
+    branches: [klero-prod]
+    paths:
+      - '.github/workflows/klero-calcy-web.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  COMMIT_ID: 7e933f855dd78a160349e9bbe24e300e93e2fb76  # paste target commit SHA from klero-frontend here, or pass via workflow_dispatch input
+  REPO: klero-organization/klero-frontend
+  SVC: klero-calcy-web
+  CHART: klero-calcy-web
+  RELEASE: klero-calcy-web
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SSH_PORT: 4719
+
+jobs:
+  build_push_deploy:
+    name: "Build, Push & Deploy klero-calcy-web"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: dev_1.2
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Determine branch containing commit and reset to commit
+        working-directory: klero-frontend
+        run: |
+          INPUT_CID="${{ inputs.commit_id }}"
+          TARGET_CID="${INPUT_CID:-${{ env.COMMIT_ID }}}"
+          if [ -z "$TARGET_CID" ]; then
+            echo "No commit specified, using HEAD"
+          else
+            git fetch --all
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            if [ -z "$BRANCH" ]; then
+              echo "❌ Commit not found in any remote branch."
+              exit 1
+            fi
+            git checkout "$BRANCH"
+            git reset --hard "$TARGET_CID"
+          fi
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - name: Set image tag (first 4 chars of commit SHA)
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push klero-calcy-web (Expo Web via nginx)
+        working-directory: klero-frontend/klero-calcy
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          echo "🔧 Patching metro.config.js for Web tslib ES6 resolution..."
+          cat > metro.patch.js << 'PATCH_EOF'
+          const fs = require('fs');
+          const metroFile = 'metro.config.js';
+          let content = fs.readFileSync(metroFile, 'utf8');
+          if (!content.includes('tslib.es6.js')) {
+            const patchCode = `
+          // Map tslib to its es6 build to fix "__extends of undefined" crash on Web
+          const ALIASES = {
+            tslib: "tslib/tslib.es6.js",
+          };
+          const defaultResolveRequest = config.resolver.resolveRequest;
+          config.resolver.resolveRequest = (context, moduleName, platform) => {
+            const target = ALIASES[moduleName] ?? moduleName;
+            if (defaultResolveRequest) {
+              return defaultResolveRequest(context, target, platform);
+            }
+            return context.resolveRequest(context, target, platform);
+          };
+          `;
+            content = content.replace('module.exports = withNativeWind', patchCode + '\nmodule.exports = withNativeWind');
+            fs.writeFileSync(metroFile, content);
+            console.log('✅ metro.config.js successfully patched with tslib alias');
+          }
+          PATCH_EOF
+          node metro.patch.js
+          rm -f metro.patch.js
+
+          echo "🔧 Patching dynamic require in app/home.tsx..."
+          node -e 'const fs = require("fs"); const f = "app/home.tsx"; if(fs.existsSync(f)){ let c = fs.readFileSync(f, "utf8"); c = c.replace(/const TabsIndex = require\("\.\/\(tabs\)\/index"\)\.default;/, ""); if(!c.includes("import TabsIndex from")) { c = "import TabsIndex from \"./(tabs)/index\";\n" + c; } fs.writeFileSync(f, c); console.log("✅ Patched app/home.tsx with static TabsIndex import"); }'
+
+          echo "🔧 Patching default background in global.css and app/_layout.tsx to prevent navigation white screen glitch..."
+          node -e 'const fs=require("fs"); const f="global.css"; if(fs.existsSync(f)){ let c=fs.readFileSync(f,"utf8"); if(!c.includes("html, body, #root")) { c="html, body, #root { background-color: #F5F0FC; min-height: 100vh; }\n" + c; fs.writeFileSync(f, c); console.log("✅ Patched global.css default background"); } }'
+          node -e 'const fs=require("fs"); const f="app/_layout.tsx"; if(fs.existsSync(f)){ let c=fs.readFileSync(f,"utf8"); c=c.replace(/contentStyle:\s*\{\s*backgroundColor:\s*"transparent"\s*\}/g, "contentStyle: { backgroundColor: \"#F5F0FC\" }"); fs.writeFileSync(f, c); console.log("✅ Patched app/_layout.tsx contentStyle background"); }'
+
+          echo "📝 Creating embedded Dockerfile for klero-calcy-web..."
+          cat > Dockerfile.calcy-web << 'DOCKERFILE'
+          FROM node:20-alpine AS builder
+          WORKDIR /app
+
+          COPY . .
+
+          RUN rm -f package-lock.json && \
+              npm install --legacy-peer-deps --no-audit --no-fund
+
+          RUN npm install tslib@^2.8.1 tailwindcss@3.4.17 --save-exact --legacy-peer-deps --no-audit --no-fund
+
+          RUN node -e "const fs = require('fs'); let c = fs.readFileSync('metro.config.js', 'utf8'); if (!c.includes('tslib.es6.js')) { const p = '\nconst ALIASES = { tslib: \"tslib/tslib.es6.js\" };\nconst defResolve = config.resolver.resolveRequest;\nconfig.resolver.resolveRequest = (context, moduleName, platform) => {\n  const target = ALIASES[moduleName] ?? moduleName;\n  return defResolve ? defResolve(context, target, platform) : context.resolveRequest(context, target, platform);\n};\n'; fs.writeFileSync('metro.config.js', c.replace('module.exports = withNativeWind', p + '\nmodule.exports = withNativeWind')); }"
+
+          RUN npx expo export --platform web
+
+          FROM nginx:alpine
+          RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+          COPY --from=builder /app/dist /usr/share/nginx/html
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod \
+            --push -f Dockerfile.calcy-web .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod"
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Deploy klero-calcy-web via Helm
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          ssh target bash -s "${SHA4}" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            cd ~/klero
+            helm upgrade --install ${{ env.RELEASE }} helmcharts/${{ env.CHART }} \
+              -n klero \
+              --set image.tag="${SHA4}-${{ env.SVC }}-prod" \
+              --wait --timeout=5m
+            echo "🔍 Pod status:"
+            kubectl get pods -n klero -l app=${{ env.CHART }} -o wide
+          EOSSH

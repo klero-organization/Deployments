@@ -1,0 +1,153 @@
+name: klero frontend web deploy
+
+on:
+  push:
+    branches: [klero-prod]
+    paths:
+      - '.github/workflows/klero-frontend-web.yaml'
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      commit_id:
+        description: "Target commit ID from klero-frontend (leave blank to use env.COMMIT_ID)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  COMMIT_ID: 7e933f855dd78a160349e9bbe24e300e93e2fb76  # paste target commit SHA from klero-frontend here, or pass via workflow_dispatch input
+  REPO: klero-organization/klero-frontend
+  SVC: klero-frontend-web
+  CHART: klero-frontend-web
+  RELEASE: klero-frontend-web
+  DOCKER_IMAGE_REPO: exchekhub/klero
+  SSH_PORT: 4719
+
+jobs:
+  build_push_deploy:
+    name: "Build, Push & Deploy klero-frontend-web"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout klero-frontend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: dev_1.2
+          token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          path: klero-frontend
+
+      - name: Determine branch containing commit and reset to commit
+        working-directory: klero-frontend
+        run: |
+          INPUT_CID="${{ inputs.commit_id }}"
+          TARGET_CID="${INPUT_CID:-${{ env.COMMIT_ID }}}"
+          if [ -z "$TARGET_CID" ]; then
+            echo "No commit specified, using HEAD"
+          else
+            git fetch --all
+            BRANCH=$(git branch -r --contains "$TARGET_CID" | grep -v '\->' | head -n 1 | sed 's/origin\///' | tr -d ' ')
+            if [ -z "$BRANCH" ]; then
+              echo "❌ Commit not found in any remote branch."
+              exit 1
+            fi
+            git checkout "$BRANCH"
+            git reset --hard "$TARGET_CID"
+          fi
+          echo "✅ Checked out commit: $(git rev-parse HEAD)"
+
+      - name: Set image tag (first 4 chars of commit SHA)
+        id: tag
+        working-directory: klero-frontend
+        run: |
+          SHA4=$(git rev-parse HEAD | cut -c1-4)
+          echo "SHA4=${SHA4}" >> $GITHUB_OUTPUT
+          echo "🏷️ Image Tag SHA4: ${SHA4}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push klero-frontend-web (Next.js - klero-web)
+        working-directory: klero-frontend/klero-web
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          echo "📝 Creating embedded Dockerfile.web..."
+          cat > Dockerfile.web << 'DOCKERFILE'
+          FROM node:20-alpine AS builder
+          WORKDIR /app
+          COPY package*.json ./
+          RUN npm install
+          COPY . .
+          ARG CALCY_APP_URL=https://calcy.klero.in
+          ENV CALCY_APP_URL=$CALCY_APP_URL
+          ARG KLERO_API_BASE_URL=https://backend.klero.in/api
+          ENV KLERO_API_BASE_URL=$KLERO_API_BASE_URL
+          ARG EXPO_PUBLIC_CHECKIN_API_KEY=6K8EwDYV3JZN5f3dXBPiuwvZ3DxCh9MFJcnIm8Yqw9v_Qp73KFEJZEYZdc3ZyGCr
+          ENV EXPO_PUBLIC_CHECKIN_API_KEY=$EXPO_PUBLIC_CHECKIN_API_KEY
+          RUN npm run build
+
+          FROM node:20-alpine AS runner
+          WORKDIR /app
+          ENV NODE_ENV=production
+          ENV PORT=3000
+          ENV HOSTNAME="0.0.0.0"
+          ENV CALCY_APP_URL=https://calcy.klero.in
+          ENV KLERO_API_BASE_URL=https://backend.klero.in/api
+          ENV EXPO_PUBLIC_CHECKIN_API_KEY=6K8EwDYV3JZN5f3dXBPiuwvZ3DxCh9MFJcnIm8Yqw9v_Qp73KFEJZEYZdc3ZyGCr
+          COPY --from=builder /app ./
+          EXPOSE 3000
+          CMD ["npm", "run", "start", "--", "-p", "3000"]
+          DOCKERFILE
+
+          docker buildx build --platform linux/amd64 \
+            --build-arg CALCY_APP_URL="https://calcy.klero.in" \
+            --build-arg KLERO_API_BASE_URL="https://backend.klero.in/api" \
+            --build-arg EXPO_PUBLIC_CHECKIN_API_KEY="6K8EwDYV3JZN5f3dXBPiuwvZ3DxCh9MFJcnIm8Yqw9v_Qp73KFEJZEYZdc3ZyGCr" \
+            -t ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod \
+            --push -f Dockerfile.web .
+          echo "✅ Pushed: ${{ env.DOCKER_IMAGE_REPO }}:${SHA4}-${{ env.SVC }}-prod"
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.KLERO_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.KLERO_SSH_HOST }}
+          SSH_USERNAME: ${{ secrets.KLERO_SSH_USERNAME }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host target
+            HostName $SSH_HOST
+            User $SSH_USERNAME
+            Port ${{ env.SSH_PORT }}
+            IdentityFile ~/.ssh/id_rsa
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Deploy klero-frontend-web via Helm
+        env:
+          SHA4: ${{ steps.tag.outputs.SHA4 }}
+        run: |
+          ssh target bash -s "${SHA4}" << 'EOSSH'
+            set -e
+            SHA4="$1"
+            cd ~/klero
+            helm upgrade --install ${{ env.RELEASE }} helmcharts/${{ env.CHART }} \
+              -n klero \
+              --set image.tag="${SHA4}-${{ env.SVC }}-prod" \
+              --wait --timeout=5m
+            echo "🔍 Pod status:"
+            kubectl get pods -n klero -l app=${{ env.CHART }} -o wide
+          EOSSH

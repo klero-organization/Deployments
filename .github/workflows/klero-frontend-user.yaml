@@ -37,6 +37,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.REPO }}
+          ref: dev_1.2
           token: ${{ secrets.KLERO_PAT_FOR_FETCH || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
           path: klero-frontend
@@ -87,17 +88,21 @@ jobs:
 
           COPY . .
 
-          RUN rm -rf klero-admin && \
-              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => w !== "klero-admin"); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
+          RUN rm -rf klero-admin klero_admin klero-web klero-calcy && \
+              node -e 'const p = require("./package.json"); p.workspaces = p.workspaces.filter(w => !["klero-admin", "klero_admin", "klero-web", "klero-calcy"].includes(w)); require("fs").writeFileSync("./package.json", JSON.stringify(p, null, 2));'
 
           RUN node -e 'const fs=require("fs"); const f="packages/tools/tsup.config.ts"; if(fs.existsSync(f)){ fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("dts: true", "dts: false")); }' && \
               node -e 'const fs=require("fs"); ["packages/tools/tsconfig.json", "klero-user/tsconfig.json"].forEach(f => { if(fs.existsSync(f)){ const c=JSON.parse(fs.readFileSync(f)); c.compilerOptions=c.compilerOptions||{}; c.compilerOptions.ignoreDeprecations="6.0"; fs.writeFileSync(f, JSON.stringify(c,null,2)); } });'
 
           RUN npm install --legacy-peer-deps --ignore-scripts
-          RUN npm install tailwindcss@3.4.17 --save-exact
+          RUN npm install tailwindcss@3.4.17 tslib@^2.8.1 --save-exact --legacy-peer-deps
           RUN (cd packages/tools && npx tsup --no-dts) || (npm run build:tools -- --no-dts) || true
 
           WORKDIR /app/klero-user
+          # Set baseUrl: /user so Expo web bundles assets and routes with the /user subpath
+          RUN node -e 'const fs=require("fs"); const f="app.json"; const c=JSON.parse(fs.readFileSync(f,"utf8")); c.expo=c.expo||{}; c.expo.experiments=c.expo.experiments||{}; c.expo.experiments.baseUrl="/user"; fs.writeFileSync(f, JSON.stringify(c,null,2)); console.log("✅ Configured baseUrl: /user in app.json");'
+          # Inject tslib ES6 alias into metro.config.js to prevent '__extends of undefined' crash on web
+          RUN node -e 'const fs=require("fs"); const m="metro.config.js"; if(fs.existsSync(m)){ let c=fs.readFileSync(m,"utf8"); if(!c.includes("tslib.es6.js")){ const p="\nconst ALIASES={tslib:\"tslib/tslib.es6.js\"};\nconst defRes=config.resolver.resolveRequest;\nconfig.resolver.resolveRequest=(context,moduleName,platform)=>{const target=ALIASES[moduleName]??moduleName;return defRes?defRes(context,target,platform):context.resolveRequest(context,target,platform);};\n"; fs.writeFileSync(m,c.replace("module.exports = withNativeWind", p+"\nmodule.exports = withNativeWind")); } }'
           ARG API_BASE_URL=https://backend.klero.in/api
           ENV EXPO_PUBLIC_API_URL=$API_BASE_URL
           ENV EXPO_PUBLIC_API_BASE_URL=$API_BASE_URL
@@ -105,7 +110,7 @@ jobs:
           RUN npx expo export --platform web
 
           FROM nginx:alpine
-          RUN printf 'server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+          RUN printf 'server {\n    listen 80;\n    location /user/ {\n        alias /usr/share/nginx/html/;\n        try_files $uri $uri/ /index.html;\n    }\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
           COPY --from=builder /app/klero-user/dist /usr/share/nginx/html
           EXPOSE 80
           CMD ["nginx", "-g", "daemon off;"]
