@@ -15,7 +15,7 @@ env:
   # pattern as the individual service workflows. Leave blank to deploy that
   # repo's services at HEAD instead.
   BACKEND_COMMIT_ID: 3e90c58b379c58b8cdafd9ad74bdd6f2fee5ccce
-  FRONTEND_COMMIT_ID: dc2a2d905da52e3419aa0efdac768601d6adeeea
+  FRONTEND_COMMIT_ID: dda23d06b962aca2a9937f490b20aabe08281c02
 
 on:
   push:
